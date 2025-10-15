@@ -1,6 +1,7 @@
 {
-  "name": "printer",
+  "name": "tradingbot-btc-rsi-ema-ws",
   "version": "0.1.0",
+  "description": "Bot de trading automatique BTC/USDT avec stratégie RSI + EMA en temps réel",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
@@ -9,19 +10,24 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@types/ws": "^8.18.1",
+    "ccxt": "^4.5.10",
+    "next": "15.5.5",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "next": "15.5.5"
+    "recharts": "^3.2.1",
+    "technicalindicators": "^3.1.0",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@tailwindcss/postcss": "^4",
-    "tailwindcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "15.5.5",
-    "@eslint/eslintrc": "^3"
+    "tailwindcss": "^4",
+    "typescript": "^5"
   }
 }
