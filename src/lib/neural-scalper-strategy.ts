@@ -1,4 +1,5 @@
-import { Candle, Position, StrategyConfig, TradingSignal } from '@/types/trading';
+import { Candle, CompletedTrade, Position, StrategyConfig, TradingSignal } from '@/types/trading';
+import CompletedTradeRepository from './db/completed-trade-repository';
 
 /**
  * NEURAL SCALPER STRATEGY - CYBORG MODE 🤖
@@ -32,6 +33,8 @@ export class NeuralScalperStrategy {
   private signalHistory: TradingSignal[] = [];
   private lastSignal: TradingSignal | null = null;
   private initialCapital: number = 100000; // 100,000 USDT
+  private completedTrades: CompletedTrade[] = [];
+  private entrySignal: TradingSignal | null = null;
   
   // Neural detection flags
   private isPriceAccelerating: boolean = false;
@@ -375,7 +378,7 @@ export class NeuralScalperStrategy {
           currentCapital: this.initialCapital + this.totalPnL
         }
       };
-      this.recordSignal(buySignal);
+      this.entrySignal = buySignal;
       return buySignal;
     }
 
@@ -410,7 +413,7 @@ export class NeuralScalperStrategy {
           currentCapital: this.initialCapital + this.totalPnL
         }
       };
-      this.recordSignal(sellSignal);
+      this.entrySignal = sellSignal;
       return sellSignal;
     }
 
@@ -479,22 +482,47 @@ export class NeuralScalperStrategy {
    * Close position with fees calculation
    */
   private closePosition(currentPrice: number, reason: string): TradingSignal {
+    const timestamp = Date.now();
     const fees = this.calculateFees(this.currentPosition.entryPrice, currentPrice, this.currentPosition.quantity);
     const grossPnL = this.currentPosition.unrealizedPnL;
     const netPnL = grossPnL - fees;
     
     this.totalPnL += netPnL;
     this.totalTrades++;
+    const isWin = netPnL > 0;
+    if (isWin) this.winningTrades++;
+
+    // Create CompletedTrade
+    const duration = timestamp - this.currentPosition.entryTime;
+    const completedTrade: CompletedTrade = {
+      strategyName: 'Neural Scalper',
+      strategyType: 'NEURAL_SCALPER',
+      type: this.currentPosition.type as 'LONG' | 'SHORT',
+      entryPrice: this.currentPosition.entryPrice,
+      entryTime: this.currentPosition.entryTime,
+      entryReason: this.entrySignal?.reason || 'Unknown',
+      exitPrice: currentPrice,
+      exitTime: timestamp,
+      exitReason: reason,
+      quantity: this.currentPosition.quantity,
+      pnl: netPnL,
+      pnlPercent: this.currentPosition.unrealizedPnLPercent,
+      fees: fees,
+      duration: duration,
+      isWin: isWin
+    };
+
+    CompletedTradeRepository.saveCompletedTrade(completedTrade).catch(err => {
+      console.error('Failed to save completed trade:', err);
+    });
     
-    if (netPnL > 0) {
-      this.winningTrades++;
-    }
+    this.completedTrades.unshift(completedTrade);
 
     const signalType = this.currentPosition.type === 'LONG' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
     const currentCapital = this.initialCapital + this.totalPnL;
     const closeSignal: TradingSignal = {
       type: signalType,
-      timestamp: Date.now(),
+      timestamp: timestamp,
       price: currentPrice,
       rsi: 0,
       ema12: 0,
@@ -523,7 +551,7 @@ export class NeuralScalperStrategy {
       unrealizedPnLPercent: 0
     };
 
-    this.recordSignal(closeSignal);
+    this.entrySignal = null;
     return closeSignal;
   }
 
@@ -587,6 +615,7 @@ export class NeuralScalperStrategy {
       lastSignal: this.lastSignal,
       signalHistory: this.signalHistory,
       currentCapital,
+      completedTrades: this.completedTrades,
       // Boolean flags
       isPriceAccelerating: this.isPriceAccelerating,
       isVolatilityHigh: this.isVolatilityHigh,
@@ -603,6 +632,9 @@ export class NeuralScalperStrategy {
    * Execute trade (compatibility)
    */
   executeTrade(signal: TradingSignal): void {
+    // Enregistrer le signal dans l'historique
+    this.recordSignal(signal);
+    
     if (this.config.simulationMode) {
       console.log(`🤖 [NEURAL SCALPER] ${signal.type} at ${signal.price.toFixed(2)} USDT`);
     } else {
@@ -613,85 +645,67 @@ export class NeuralScalperStrategy {
   /**
    * Restore strategy state from database trades
    */
-  restoreFromDatabase(trades: any[]): void {
-    if (trades.length === 0) return;
+  async restoreFromDatabase(trades: any[]): Promise<void> {
+    console.log(`📥 Restoring Neural Scalper strategy from ${trades.length} signals...`);
 
-    console.log(`📥 Restoring Neural Scalper strategy from ${trades.length} trades...`);
+    this.totalTrades = 0;
+    this.winningTrades = 0;
+    this.totalPnL = 0;
+    this.signalHistory = [];
+    this.completedTrades = [];
 
-    // Count closed trades
-    const closeTrades = trades.filter((t: any) => 
-      t.signal_type === 'CLOSE_LONG' || t.signal_type === 'CLOSE_SHORT'
-    );
-
-    this.totalTrades = closeTrades.length;
+    this.completedTrades = await CompletedTradeRepository.getCompletedTradesByStrategy('Neural Scalper', 100);
+    console.log(`📊 Loaded ${this.completedTrades.length} completed trades`);
     
-    // Get the most recent total_pnl (it's already cumulative)
-    // Trades are sorted DESC by timestamp, so [0] is the most recent
-    const mostRecentTrade = trades[0];
-    this.totalPnL = mostRecentTrade && mostRecentTrade.total_pnl ? parseFloat(mostRecentTrade.total_pnl) : 0;
-    
-    // Count wins from individual trades (use pnl field, not total_pnl)
-    this.winningTrades = closeTrades.filter((t: any) => {
-      const tradePnl = parseFloat(t.pnl) || 0;
-      return tradePnl > 0;
-    }).length;
+    this.totalTrades = this.completedTrades.length;
+    this.winningTrades = this.completedTrades.filter(t => t.isWin).length;
+    this.totalPnL = this.completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+
+    if (trades.length === 0) {
+      console.log(`   ✅ Restored: ${this.totalTrades} trades (${this.winningTrades} wins), Win Rate: ${this.totalTrades > 0 ? ((this.winningTrades/this.totalTrades)*100).toFixed(1) : 0}%, PnL: ${this.totalPnL.toFixed(2)} USDT`);
+      return;
+    }
+
+    this.signalHistory = trades.filter((t: any) => t.signal_type !== 'HOLD').slice(0, 50).map((t: any) => ({
+      type: t.signal_type,
+      timestamp: parseInt(t.timestamp),
+      price: parseFloat(t.price),
+      rsi: 0,
+      ema12: 0,
+      ema26: 0,
+      ema50: 0,
+      ema200: 0,
+      ma7: 0,
+      ma25: 0,
+      ma99: 0,
+      reason: t.reason || ''
+    }));
+
+    if (this.signalHistory.length > 0) {
+      this.lastSignal = this.signalHistory[0];
+    }
 
     const latestTrade = trades[0];
     if (latestTrade && (latestTrade.signal_type === 'BUY' || latestTrade.signal_type === 'SELL')) {
       const hasClosingTrade = trades.some((t: any) => 
         (t.signal_type === 'CLOSE_LONG' || t.signal_type === 'CLOSE_SHORT') &&
-        new Date(t.timestamp) > new Date(latestTrade.timestamp)
+        parseInt(t.timestamp) > parseInt(latestTrade.timestamp)
       );
 
       if (!hasClosingTrade && latestTrade.position_type !== 'NONE') {
         this.currentPosition = {
           type: latestTrade.position_type,
           entryPrice: parseFloat(latestTrade.entry_price),
-          entryTime: new Date(latestTrade.entry_time).getTime(),
+          entryTime: latestTrade.entry_time ? new Date(latestTrade.entry_time).getTime() : parseInt(latestTrade.timestamp),
           quantity: parseFloat(latestTrade.quantity),
-          unrealizedPnL: parseFloat(latestTrade.unrealized_pnl) || 0,
-          unrealizedPnLPercent: parseFloat(latestTrade.unrealized_pnl_percent) || 0
+          unrealizedPnL: 0,
+          unrealizedPnLPercent: 0
         };
         console.log(`   Restored open ${this.currentPosition.type} position @ ${this.currentPosition.entryPrice.toFixed(2)}`);
       }
     }
 
-    // Restore signal history (last 50 signals)
-    this.signalHistory = trades
-      .filter((t: any) => t.signal_type !== 'HOLD')
-      .slice(0, 50)
-      .map((t: any) => ({
-        type: t.signal_type,
-        timestamp: new Date(t.timestamp).getTime(),
-        price: parseFloat(t.price),
-        rsi: 0,
-        ema12: 0,
-        ema26: 0,
-        ema50: 0,
-        ema200: 0,
-        ma7: 0,
-        ma25: 0,
-        ma99: 0,
-        reason: t.reason || '',
-        position: t.position_type !== 'NONE' ? {
-          type: t.position_type,
-          entryPrice: parseFloat(t.entry_price),
-          entryTime: new Date(t.entry_time).getTime(),
-          quantity: parseFloat(t.quantity),
-          unrealizedPnL: parseFloat(t.unrealized_pnl) || 0,
-          unrealizedPnLPercent: parseFloat(t.unrealized_pnl_percent) || 0,
-          totalPnL: parseFloat(t.total_pnl) || 0,
-          totalPnLPercent: parseFloat(t.total_pnl_percent) || 0,
-          fees: parseFloat(t.fees) || 0,
-          currentCapital: parseFloat(t.current_capital) || 100000
-        } : undefined
-      }));
-
-    if (this.signalHistory.length > 0) {
-      this.lastSignal = this.signalHistory[0];
-    }
-
-    console.log(`   ✅ Restored: ${this.totalTrades} trades, ${this.winningTrades} wins, ${this.totalPnL.toFixed(2)} USDT total PnL, ${this.signalHistory.length} signals in history`);
+    console.log(`   ✅ Restored: ${this.totalTrades} trades (${this.winningTrades} wins), Win Rate: ${this.totalTrades > 0 ? ((this.winningTrades/this.totalTrades)*100).toFixed(1) : 0}%, PnL: ${this.totalPnL.toFixed(2)} USDT`);
   }
 }
 

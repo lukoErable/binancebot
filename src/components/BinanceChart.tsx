@@ -2,7 +2,7 @@
 
 import { StrategyPerformance, StrategyState } from '@/types/trading';
 import { useEffect, useState } from 'react';
-import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface BinanceChartProps {
   state: StrategyState;
@@ -30,6 +30,8 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
         return { bg: 'bg-pink-500', text: 'text-pink-400', border: 'border-pink-400' };
       case 'BOLLINGER_BOUNCE':
         return { bg: 'bg-teal-500', text: 'text-teal-400', border: 'border-teal-400' };
+      case 'TREND_FOLLOWER':
+        return { bg: 'bg-cyan-500', text: 'text-cyan-400', border: 'border-cyan-400' };
       default:
         return { bg: 'bg-blue-500', text: 'text-blue-400', border: 'border-blue-400' };
     }
@@ -277,6 +279,9 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
   const maxPrice = Math.max(...prices);
   const priceRange = maxPrice - minPrice;
   const margin = priceRange * 0.1; // 10% margin
+  
+  // Get current price (last candle)
+  const currentPrice = state.candles.length > 0 ? state.candles[state.candles.length - 1].close : 0;
 
   interface TooltipPayload {
     value: number;
@@ -387,15 +392,11 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
           <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-4">
               <h3 className="text-white font-semibold text-lg" title="BTC/USDT: Paire de trading Bitcoin contre Tether (USD)">BTC/USDT</h3>
-              {selectedStrategy !== 'GLOBAL' && (
-                <div className={`px-3 py-1 ${strategyColors.bg} text-white text-sm rounded font-medium shadow-lg`} title={`Signaux filtrés pour la stratégie: ${selectedStrategy}`}>
-                  📊 {selectedStrategy}
-                </div>
-              )}
+              
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowEMA12(!showEMA12)}
-                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
                     showEMA12 ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide utilisé par Momentum Crossover"
@@ -404,7 +405,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 </button>
                 <button
                   onClick={() => setShowEMA26(!showEMA26)}
-                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
                     showEMA26 ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen utilisé par Momentum Crossover"
@@ -413,7 +414,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 </button>
                 <button
                   onClick={() => setShowEMA50(!showEMA50)}
-                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
                     showEMA50 ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme utilisé par le bot"
@@ -422,7 +423,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 </button>
                 <button
                   onClick={() => setShowEMA200(!showEMA200)}
-                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
                     showEMA200 ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Indicateur de tendance long terme utilisé par le bot"
@@ -430,33 +431,40 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   EMA(200)
                 </button>
               </div>
+
+              {/* Strategy Name Badge */}
+              {selectedStrategy !== 'GLOBAL' && (
+                <div className={`px-3 py-1.5 border-2 ${strategyColors.border} ${strategyColors.text} text-sm rounded-md font-semibold`} title={`Stratégie sélectionnée: ${selectedStrategy}`}>
+                   {selectedStrategy}
+                </div>
+              )}
             </div>
             
             <div className="flex items-center gap-4">
               {/* EMA Values */}
-              <div className="flex items-center gap-4 text-sm">
+              <div className="flex items-center gap-4">
                 {showEMA12 && chartData.length > 0 && chartData[chartData.length - 1].ema12 && (
-                  <div className="flex items-center gap-1" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Utilisée par Momentum Crossover pour détecter les croisements rapides">
+                  <div className="flex items-center gap-1.5" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Utilisée par Momentum Crossover pour détecter les croisements rapides">
                     <div className="w-3 h-0.5 bg-green-400"></div>
-                    <span className="text-green-400 font-mono">EMA(12): {chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
+                    <span className="text-green-400 font-mono text-base font-semibold">EMA(12): {chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
                   </div>
                 )}
                 {showEMA26 && chartData.length > 0 && chartData[chartData.length - 1].ema26 && (
-                  <div className="flex items-center gap-1" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Utilisée par Momentum Crossover pour détecter les croisements moyens">
+                  <div className="flex items-center gap-1.5" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Utilisée par Momentum Crossover pour détecter les croisements moyens">
                     <div className="w-3 h-0.5 bg-orange-400"></div>
-                    <span className="text-orange-400 font-mono">EMA(26): {chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
+                    <span className="text-orange-400 font-mono text-base font-semibold">EMA(26): {chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
                   </div>
                 )}
                 {showEMA50 && chartData.length > 0 && chartData[chartData.length - 1].ema50 && (
-                  <div className="flex items-center gap-1" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Utilisée par le bot pour détecter les tendances">
+                  <div className="flex items-center gap-1.5" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Utilisée par le bot pour détecter les tendances">
                     <div className="w-3 h-0.5 bg-blue-400"></div>
-                    <span className="text-blue-400 font-mono">EMA(50): {chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
+                    <span className="text-blue-400 font-mono text-base font-semibold">EMA(50): {chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
                   </div>
                 )}
                 {showEMA200 && chartData.length > 0 && chartData[chartData.length - 1].ema200 && (
-                  <div className="flex items-center gap-1" title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Utilisée par le bot pour confirmer la tendance majeure">
+                  <div className="flex items-center gap-1.5" title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Utilisée par le bot pour confirmer la tendance majeure">
                     <div className="w-3 h-0.5 bg-purple-400"></div>
-                    <span className="text-purple-400 font-mono">EMA(200): {chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
+                    <span className="text-purple-400 font-mono text-base font-semibold">EMA(200): {chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
                   </div>
                 )}
               </div>
@@ -490,6 +498,21 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   tickFormatter={(value) => `$${value.toFixed(0)}`}
                 />
                 <Tooltip content={<CustomTooltip />} />
+                
+                {/* Current Price Line - Ligne verte en pointillés */}
+                <ReferenceLine 
+                  y={currentPrice} 
+                  stroke="#10B981" 
+                  strokeDasharray="5 5" 
+                  strokeWidth={2}
+                  label={{ 
+                    value: `${currentPrice.toFixed(2)} USDT`, 
+                    position: 'left',
+                    fill: '#10B981',
+                    fontSize: 12,
+                    fontWeight: 'bold'
+                  }}
+                />
                 
                 {/* Price Line - Smoothed for better readability */}
                 <Line
@@ -566,12 +589,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                     const { cx, cy, payload } = props;
                     if (cx === undefined || cy === undefined || !payload?.buySignals?.length) return <g />;
-                    return (
-                      <g>
-                        <circle cx={cx} cy={cy} r={8} fill="#10B981" stroke="#fff" strokeWidth={2} opacity={0.9} />
-                        <text x={cx} y={cy + 4} textAnchor="middle" fontSize={14} fill="#fff" fontWeight="bold">▲</text>
-                      </g>
-                    );
+                    return <circle cx={cx} cy={cy} r={4} fill="#10B981" opacity={0.9} />;
                   }}
                 />
                 <Scatter
@@ -581,12 +599,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                     const { cx, cy, payload } = props;
                     if (cx === undefined || cy === undefined || !payload?.sellSignals?.length) return <g />;
-                    return (
-                      <g>
-                        <circle cx={cx} cy={cy} r={8} fill="#EF4444" stroke="#fff" strokeWidth={2} opacity={0.9} />
-                        <text x={cx} y={cy + 4} textAnchor="middle" fontSize={14} fill="#fff" fontWeight="bold">▼</text>
-                      </g>
-                    );
+                    return <circle cx={cx} cy={cy} r={4} fill="#EF4444" opacity={0.9} />;
                   }}
                 />
                 
@@ -598,12 +611,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                     const { cx, cy, payload } = props;
                     if (cx === undefined || cy === undefined || !payload?.closeLongSignals?.length) return <g />;
-                    return (
-                      <g>
-                        <rect x={cx - 6} y={cy - 6} width={12} height={12} fill="#F59E0B" stroke="#fff" strokeWidth={2} opacity={0.9} rx={2} />
-                        <text x={cx} y={cy + 3} textAnchor="middle" fontSize={10} fill="#fff" fontWeight="bold">X</text>
-                      </g>
-                    );
+                    return <circle cx={cx} cy={cy} r={4} fill="#F59E0B" opacity={0.9} />;
                   }}
                 />
                 <Scatter
@@ -613,12 +621,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                     const { cx, cy, payload } = props;
                     if (cx === undefined || cy === undefined || !payload?.closeShortSignals?.length) return <g />;
-                    return (
-                      <g>
-                        <rect x={cx - 6} y={cy - 6} width={12} height={12} fill="#06B6D4" stroke="#fff" strokeWidth={2} opacity={0.9} rx={2} />
-                        <text x={cx} y={cy + 3} textAnchor="middle" fontSize={10} fill="#fff" fontWeight="bold">X</text>
-                      </g>
-                    );
+                    return <circle cx={cx} cy={cy} r={4} fill="#06B6D4" opacity={0.9} />;
                   }}
                 />
               </ComposedChart>
@@ -633,78 +636,80 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
         <div className="bg-gray-800 border-b border-gray-700 px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h3 className="text-white font-semibold" title="BTC/USDT: Paire de trading Bitcoin contre Tether (USD)">BTC/USDT</h3>
+            
+            {/* Chart Toggle Controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowEMA12(!showEMA12)}
+                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                  showEMA12 ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
+                }`}
+                title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide utilisé par Momentum Crossover"
+              >
+                EMA(12)
+              </button>
+              <button
+                onClick={() => setShowEMA26(!showEMA26)}
+                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                  showEMA26 ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
+                }`}
+                title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen utilisé par Momentum Crossover"
+              >
+                EMA(26)
+              </button>
+              <button
+                onClick={() => setShowEMA50(!showEMA50)}
+                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                  showEMA50 ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+                }`}
+                title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme utilisé par le bot"
+              >
+                EMA(50)
+              </button>
+              <button
+                onClick={() => setShowEMA200(!showEMA200)}
+                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                  showEMA200 ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'
+                }`}
+                title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Indicateur de tendance long terme utilisé par le bot"
+              >
+                EMA(200)
+              </button>
+            </div>
+
+            {/* Strategy Name Badge */}
             {selectedStrategy !== 'GLOBAL' && (
-              <div className={`px-2 py-1 ${strategyColors.bg} text-white text-xs rounded font-medium shadow-lg`} title={`Signaux filtrés pour la stratégie: ${selectedStrategy}`}>
-                📊 {selectedStrategy}
+              <div className={`px-3 py-1 border-2 ${strategyColors.border} ${strategyColors.text} text-sm rounded-md font-semibold`} title={`Stratégie sélectionnée: ${selectedStrategy}`}>
+                 {selectedStrategy}
+
               </div>
             )}
-            {/* Chart Toggle Controls - separate row */}
-        <div className="bg-gray-800 px-4 py-1 flex items-center justify-center">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowEMA12(!showEMA12)}
-              className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                showEMA12 ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
-              }`}
-              title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide utilisé par Momentum Crossover"
-            >
-              EMA(12)
-            </button>
-            <button
-              onClick={() => setShowEMA26(!showEMA26)}
-              className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                showEMA26 ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
-              }`}
-              title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen utilisé par Momentum Crossover"
-            >
-              EMA(26)
-            </button>
-            <button
-              onClick={() => setShowEMA50(!showEMA50)}
-              className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                showEMA50 ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
-              }`}
-              title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme utilisé par le bot"
-            >
-              EMA(50)
-            </button>
-            <button
-              onClick={() => setShowEMA200(!showEMA200)}
-              className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                showEMA200 ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'
-              }`}
-              title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Indicateur de tendance long terme utilisé par le bot"
-            >
-              EMA(200)
-            </button>
-          </div>
-        </div>
           </div>
         
         {/* EMA Values - moved to the right */}
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex items-center gap-4">
           {showEMA12 && chartData.length > 0 && chartData[chartData.length - 1].ema12 && (
-            <div className="flex items-center gap-1" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Utilisée par Momentum Crossover pour détecter les croisements rapides">
+            <div className="flex items-center gap-1.5" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Utilisée par Momentum Crossover pour détecter les croisements rapides">
               <div className="w-3 h-0.5 bg-green-400"></div>
-              <span className="text-green-400 font-mono">EMA(12): {chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
+              <span className="text-green-400 font-mono text-base font-semibold">EMA(12): {chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
             </div>
           )}
           {showEMA26 && chartData.length > 0 && chartData[chartData.length - 1].ema26 && (
-            <div className="flex items-center gap-1" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Utilisée par Momentum Crossover pour détecter les croisements moyens">
+            <div className="flex items-center gap-1.5" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Utilisée par Momentum Crossover pour détecter les croisements moyens">
               <div className="w-3 h-0.5 bg-orange-400"></div>
-              <span className="text-orange-400 font-mono">EMA(26): {chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
+              <span className="text-orange-400 font-mono text-base font-semibold">EMA(26): {chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
             </div>
           )}
           {showEMA50 && chartData.length > 0 && chartData[chartData.length - 1].ema50 && (
-            <div className="flex items-center gap-1" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Utilisée par le bot pour détecter les tendances">
+            <div className="flex items-center gap-1.5" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Utilisée par le bot pour détecter les tendances">
               <div className="w-3 h-0.5 bg-blue-400"></div>
-              <span className="text-blue-400 font-mono">EMA(50): {chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
+              <span className="text-blue-400 font-mono text-base font-semibold">EMA(50): {chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
             </div>
           )}
           {showEMA200 && chartData.length > 0 && chartData[chartData.length - 1].ema200 && (
-            <div className="flex items-center gap-1" title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Utilisée par le bot pour confirmer la tendance majeure">
+            <div className="flex items-center gap-1.5" title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Utilisée par le bot pour confirmer la tendance majeure">
               <div className="w-3 h-0.5 bg-purple-400"></div>
-              <span className="text-purple-400 font-mono">EMA(200): {chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
+              <span className="text-purple-400 font-mono text-base font-semibold">EMA(200): {chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
             </div>
           )}
           
@@ -740,6 +745,21 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               tickFormatter={(value) => `$${value.toLocaleString()}`}
             />
             <Tooltip content={<CustomTooltip />} />
+            
+            {/* Current Price Line - Ligne verte en pointillés */}
+            <ReferenceLine 
+              y={currentPrice} 
+              stroke="#10B981" 
+              strokeDasharray="5 5" 
+              strokeWidth={2}
+              label={{ 
+                value: `${currentPrice.toFixed(2)}`, 
+                position: 'left',
+                fill: '#10B981',
+                fontSize: 12,
+                fontWeight: 'bold'
+              }}
+            />
             
             {/* Price Line - Smoothed for better readability */}
             <Line
@@ -808,12 +828,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                 const { cx, cy, payload } = props;
                 if (cx === undefined || cy === undefined || !payload?.buySignals?.length) return <g />;
-                return (
-                  <g>
-                    <circle cx={cx} cy={cy} r={10} fill="#10B981" stroke="#fff" strokeWidth={2.5} opacity={0.95} />
-                    <text x={cx} y={cy + 5} textAnchor="middle" fontSize={16} fill="#fff" fontWeight="bold">▲</text>
-                  </g>
-                );
+                return <circle cx={cx} cy={cy} r={4} fill="#10B981" opacity={0.9} />;
               }}
             />
             <Scatter
@@ -823,12 +838,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                 const { cx, cy, payload } = props;
                 if (cx === undefined || cy === undefined || !payload?.sellSignals?.length) return <g />;
-                return (
-                  <g>
-                    <circle cx={cx} cy={cy} r={10} fill="#EF4444" stroke="#fff" strokeWidth={2.5} opacity={0.95} />
-                    <text x={cx} y={cy + 5} textAnchor="middle" fontSize={16} fill="#fff" fontWeight="bold">▼</text>
-                  </g>
-                );
+                return <circle cx={cx} cy={cy} r={4} fill="#EF4444" opacity={0.9} />;
               }}
             />
             
@@ -840,12 +850,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                 const { cx, cy, payload } = props;
                 if (cx === undefined || cy === undefined || !payload?.closeLongSignals?.length) return <g />;
-                return (
-                  <g>
-                    <rect x={cx - 7} y={cy - 7} width={14} height={14} fill="#F59E0B" stroke="#fff" strokeWidth={2.5} opacity={0.95} rx={2} />
-                    <text x={cx} y={cy + 4} textAnchor="middle" fontSize={12} fill="#fff" fontWeight="bold">X</text>
-                  </g>
-                );
+                return <circle cx={cx} cy={cy} r={4} fill="#F59E0B" opacity={0.9} />;
               }}
             />
             <Scatter
@@ -855,12 +860,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               shape={(props: { cx?: number; cy?: number; payload?: any }) => {
                 const { cx, cy, payload } = props;
                 if (cx === undefined || cy === undefined || !payload?.closeShortSignals?.length) return <g />;
-                return (
-                  <g>
-                    <rect x={cx - 7} y={cy - 7} width={14} height={14} fill="#06B6D4" stroke="#fff" strokeWidth={2.5} opacity={0.95} rx={2} />
-                    <text x={cx} y={cy + 4} textAnchor="middle" fontSize={12} fill="#fff" fontWeight="bold">X</text>
-                  </g>
-                );
+                return <circle cx={cx} cy={cy} r={4} fill="#06B6D4" opacity={0.9} />;
               }}
             />
           </ComposedChart>

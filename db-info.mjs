@@ -45,8 +45,8 @@ try {
   `);
   console.table(byStrategy.rows);
 
-  // Derniers trades
-  console.log('\n🕐 5 derniers signaux:');
+  // Derniers signaux
+  console.log('\n🕐 Derniers signaux:');
   const recent = await pool.query(`
     SELECT 
       strategy_name,
@@ -57,9 +57,72 @@ try {
       current_capital
     FROM trades 
     ORDER BY timestamp DESC 
-    LIMIT 5;
+    LIMIT 100;
   `);
   console.table(recent.rows);
+
+  // Structure de la table completed_trades
+  console.log('\n\n📋 Structure de la table "completed_trades":');
+  const completedStructure = await pool.query(`
+    SELECT 
+      column_name, 
+      data_type, 
+      numeric_precision,
+      numeric_scale
+    FROM information_schema.columns 
+    WHERE table_name = 'completed_trades' 
+    ORDER BY ordinal_position;
+  `);
+  
+  if (completedStructure.rows.length > 0) {
+    console.table(completedStructure.rows);
+
+    // Statistiques des completed trades
+    console.log('\n📊 Statistiques des trades complétés:');
+    const completedTotal = await pool.query('SELECT COUNT(*) as total FROM completed_trades');
+    console.log(`Total de trades complétés: ${completedTotal.rows[0].total}`);
+
+    // Par stratégie
+    console.log('\n📈 Trades complétés par stratégie:');
+    const completedByStrategy = await pool.query(`
+      SELECT 
+        strategy_name,
+        COUNT(*) as total_trades,
+        COUNT(CASE WHEN is_win = true THEN 1 END) as wins,
+        COUNT(CASE WHEN is_win = false THEN 1 END) as losses,
+        ROUND(AVG(CASE WHEN is_win = true THEN 1 ELSE 0 END) * 100, 2) as win_rate,
+        ROUND(SUM(pnl)::numeric, 2) as total_pnl,
+        ROUND(AVG(pnl)::numeric, 2) as avg_pnl,
+        ROUND(AVG(duration)::numeric / 1000, 2) as avg_duration_sec
+      FROM completed_trades 
+      GROUP BY strategy_name
+      ORDER BY strategy_name;
+    `);
+    console.table(completedByStrategy.rows);
+
+    // Derniers trades complétés
+    console.log('\n🎯 Derniers trades complétés:');
+    const recentCompleted = await pool.query(`
+      SELECT 
+        strategy_name,
+        position_type,
+        entry_price,
+        exit_price,
+        pnl,
+        pnl_percent,
+        is_win,
+        exit_reason,
+        entry_reason,
+        EXTRACT(EPOCH FROM entry_time) * 1000 as entry_timestamp,
+        EXTRACT(EPOCH FROM exit_time) * 1000 as exit_timestamp
+      FROM completed_trades 
+      ORDER BY exit_time DESC 
+      LIMIT 20;
+    `);
+    console.table(recentCompleted.rows);
+  } else {
+    console.log('⚠️  La table "completed_trades" n\'existe pas encore.');
+  }
 
 } catch (error) {
   console.error('❌ Erreur:', error.message);

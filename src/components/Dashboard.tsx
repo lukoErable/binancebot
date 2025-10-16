@@ -136,8 +136,16 @@ export default function Dashboard() {
     }
   }, [state?.strategyPerformances]);
 
-  const formatPrice = (price: number) => price.toFixed(2);
-  const formatIndicator = (value: number) => value.toFixed(2);
+  const formatPrice = (price: number | undefined) => {
+    if (!price) return '0.00';
+    const numPrice = typeof price === 'number' ? price : parseFloat(price);
+    return isNaN(numPrice) ? '0.00' : numPrice.toFixed(2);
+  };
+  const formatIndicator = (value: number | undefined) => {
+    if (!value) return '0.00';
+    const numValue = typeof value === 'number' ? value : parseFloat(value);
+    return isNaN(numValue) ? '0.00' : numValue.toFixed(2);
+  };
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString('fr-FR');
   };
@@ -179,7 +187,7 @@ export default function Dashboard() {
   };
 
   // Get criteria for a specific strategy type
-  const getCriteriaForStrategy = (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE', strategyMetrics: StrategyPerformance) => {
+  const getCriteriaForStrategy = (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER', strategyMetrics: StrategyPerformance) => {
     if (!state) return null;
 
     // Extract position from strategyMetrics
@@ -476,6 +484,29 @@ export default function Dashboard() {
       return criteria;
     }
 
+    // TREND_FOLLOWER Strategy
+    if (strategyType === 'TREND_FOLLOWER') {
+      const hasNoPosition = position.type === 'NONE';
+      const priceAboveEma50 = state.currentPrice > state.ema50;
+      const priceBelowEma50 = state.currentPrice < state.ema50;
+      
+      const criteria = {
+        strategyType: 'TREND_FOLLOWER' as const,
+        long: {
+          trendUp: priceAboveEma50,
+          trendUpStatus: getStatus(priceAboveEma50, false)
+        },
+        short: {
+          trendDown: priceBelowEma50,
+          trendDownStatus: getStatus(priceBelowEma50, false)
+        },
+        cooldownRemaining: 0,
+        longReady: priceAboveEma50,
+        shortReady: priceBelowEma50
+      };
+      return criteria;
+    }
+
     // Default: RSI + EMA Strategy
     const emaDiff = Math.abs(state.ema50 - state.ema200);
     const emaPercent = (emaDiff / state.ema200) * 100;
@@ -580,6 +611,13 @@ export default function Dashboard() {
           text: 'text-teal-400',
           accent: 'bg-teal-400',
           bgSelected: 'bg-teal-950/40'
+        };
+      case 'TREND_FOLLOWER':
+        return {
+          border: 'border-cyan-400',
+          text: 'text-cyan-400',
+          accent: 'bg-cyan-400',
+          bgSelected: 'bg-cyan-950/40'
         };
       default:
         return {
@@ -700,6 +738,12 @@ export default function Dashboard() {
         (criteriaData.rsiOversoldStatus || criteriaData.rsiOverboughtStatus) as string,
         criteriaData.volatilityStatus as string
       ];
+    }
+    
+    if (criteria.strategyType === 'TREND_FOLLOWER') {
+      return type === 'long'
+        ? [criteriaData.trendUpStatus as string]
+        : [criteriaData.trendDownStatus as string];
     }
     
     // RSI + EMA
@@ -951,6 +995,31 @@ export default function Dashboard() {
               Vol {criteriaData.bbWidthValue}
             </span>
           </>
+        );
+      }
+    }
+
+    // TREND_FOLLOWER Strategy
+    if (criteria.strategyType === 'TREND_FOLLOWER') {
+      if (type === 'long') {
+        return (
+          <span 
+            className={`flex items-center gap-1 ${criteriaData.trendUpStatus === 'green' ? 'text-green-400' : 'text-gray-500'}`}
+            title="Prix > EMA50 (tendance haussière)"
+          >
+            <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.trendUpStatus)}`}></span>
+            Trend↗
+          </span>
+        );
+      } else {
+        return (
+          <span 
+            className={`flex items-center gap-1 ${criteriaData.trendDownStatus === 'green' ? 'text-green-400' : 'text-gray-500'}`}
+            title="Prix < EMA50 (tendance baissière)"
+          >
+            <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.trendDownStatus)}`}></span>
+            Trend↘
+          </span>
         );
       }
     }
@@ -1431,44 +1500,104 @@ export default function Dashboard() {
             })()}
           </div>
 
-          {/* Signals History - Compact */}
+          {/* Completed Trades History */}
           {(() => {
-            // Get signal history from selected strategy or combined
-            let signalHistory: TradingSignal[] = [];
+            // Get completed trades from selected strategy or combined
+            let completedTrades: any[] = [];
             
             if (selectedStrategy === 'GLOBAL') {
               strategyPerformances.forEach(perf => {
-                signalHistory = [...signalHistory, ...(perf.signalHistory || [])];
+                if (perf.completedTrades) {
+                  completedTrades = [...completedTrades, ...perf.completedTrades.map(t => ({ ...t, strategyName: perf.strategyName }))];
+                }
               });
-              signalHistory.sort((a, b) => b.timestamp - a.timestamp);
+              completedTrades.sort((a, b) => a.exitTime - b.exitTime); // Du plus ancien au plus récent
             } else {
               const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
-              signalHistory = strategy?.signalHistory || [];
+              completedTrades = strategy?.completedTrades || [];
             }
             
-            if (signalHistory.length === 0) return null;
+            if (completedTrades.length === 0) return null;
+            
+            // Prendre les 10 derniers trades
+            const recentTrades = completedTrades.slice(-10);
             
             return (
               <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-gray-300">RECENT SIGNALS {selectedStrategy !== 'GLOBAL' && `- ${selectedStrategy}`}</h3>
-                  <span className="text-xs text-gray-500">{signalHistory.length} total</span>
+                  <h3 className="text-sm font-semibold text-gray-300">RECENT TRADES {selectedStrategy !== 'GLOBAL' && `- ${selectedStrategy}`}</h3>
+                  <span className="text-xs text-gray-500">{completedTrades.length} total</span>
                 </div>
                 <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {[...signalHistory].slice(0, 10).map((signal: TradingSignal, index: number) => (
-                    <div key={index} className="flex items-center justify-between py-1 text-xs">
-                      <div className="flex items-center gap-3">
-                        <span className={`${getSignalColor(signal.type)} px-2 py-1 rounded text-xs font-bold`}>
-                          {signal.type}
-                        </span>
-                        <span className="text-white font-mono">${formatPrice(signal.price)}</span>
-                        <span className="text-gray-400">{formatTime(signal.timestamp)}</span>
+                  {recentTrades.map((trade: any, index: number) => {
+                    const isWin = trade.isWin;
+                    const durationMin = Math.floor(trade.duration / 60000);
+                    const durationSec = Math.floor((trade.duration % 60000) / 1000);
+                    
+                    return (
+                      <div key={index} className={`py-2 px-3 rounded ${
+                        isWin 
+                          ? 'bg-green-900/10 border border-green-500/20' 
+                          : 'bg-red-900/10 border border-red-500/20'
+                      }`}>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-3">
+                            {/* Position Type */}
+                            <span className={`${
+                              trade.type === 'LONG' ? 'bg-green-500' : 'bg-red-500'
+                            } px-2 py-1 rounded text-xs font-bold min-w-[60px] text-center text-white`}>
+                              {trade.type}
+                            </span>
+                            
+                            {/* Entry → Exit */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-white font-mono font-semibold text-xs">${formatPrice(trade.entryPrice)}</span>
+                              <span className="text-gray-500">→</span>
+                              <span className="text-white font-mono font-semibold text-xs">${formatPrice(trade.exitPrice)}</span>
+                            </div>
+                            
+                            {/* Time & Duration */}
+                            <span className="text-gray-400 text-[11px]">
+                              {formatTime(trade.exitTime)} ({durationMin}m{durationSec}s)
+                            </span>
+                            
+                            {/* Win/Loss Badge */}
+                            <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                              isWin 
+                                ? 'bg-green-500/20 text-green-400' 
+                                : 'bg-red-500/20 text-red-400'
+                            }`}>
+                              {isWin ? '✅ WIN' : '❌ LOSS'}
+                            </span>
+                            
+                            {/* P&L */}
+                            <span className={`font-bold text-sm ${
+                              isWin ? 'text-green-400' : 'text-red-400'
+                            }`}>
+                              {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)} USDT
+                            </span>
+                            <span className={`text-[10px] ${
+                              isWin ? 'text-green-400/70' : 'text-red-400/70'
+                            }`}>
+                              ({trade.pnlPercent >= 0 ? '+' : ''}{trade.pnlPercent.toFixed(2)}%)
+                            </span>
+                          </div>
+                        </div>
+                        
+                        {/* Reasons */}
+                        <div className="flex items-center gap-4 text-[10px] ml-[72px]">
+                          <div className="flex items-center gap-1">
+                            <span className="text-gray-500">Entry:</span>
+                            <span className="text-gray-400">{trade.entryReason.substring(0, 40)}...</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-gray-500">Exit:</span>
+                            <span className="text-gray-400">{trade.exitReason}</span>
+                          </div>
+                        </div>
                       </div>
-                      <span className="text-gray-500 truncate max-w-xs">
-                        {signal.reason}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             );

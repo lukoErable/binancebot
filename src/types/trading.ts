@@ -37,6 +37,25 @@ export interface TradingSignal {
   position?: Position;
 }
 
+export interface CompletedTrade {
+  id?: number;
+  strategyName: string;
+  strategyType: string;
+  type: 'LONG' | 'SHORT'; // Type de position
+  entryPrice: number;
+  entryTime: number;
+  exitPrice: number;
+  exitTime: number;
+  quantity: number;
+  pnl: number; // Profit/Loss en USDT
+  pnlPercent: number; // Profit/Loss en %
+  fees: number;
+  duration: number; // Durée en ms
+  exitReason: string; // TP, SL, Trend Reversal, etc.
+  entryReason: string;
+  isWin: boolean;
+}
+
 export interface StrategyState {
   candles: Candle[];
   currentPrice: number;
@@ -106,7 +125,7 @@ export interface StrategyConfig {
 
 export interface StrategyPerformance {
   strategyName: string;
-  strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE';
+  strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER';
   totalPnL: number;
   totalTrades: number;
   winningTrades: number;
@@ -114,6 +133,7 @@ export interface StrategyPerformance {
   currentPosition: Position;
   lastSignal: TradingSignal | null;
   signalHistory: TradingSignal[];
+  completedTrades?: CompletedTrade[]; // Trades complets (entrée + sortie)
   isActive: boolean;
   currentCapital: number; // Capital actuel (initial + P&L)
   // Strategy-specific flags

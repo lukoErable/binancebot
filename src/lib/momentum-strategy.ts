@@ -1,4 +1,5 @@
-import { Candle, Position, StrategyConfig, TradingSignal } from '@/types/trading';
+import { Candle, CompletedTrade, Position, StrategyConfig, TradingSignal } from '@/types/trading';
+import CompletedTradeRepository from './db/completed-trade-repository';
 
 /**
  * Momentum Crossover Strategy
@@ -23,6 +24,8 @@ export class MomentumCrossoverStrategy {
   private signalHistory: TradingSignal[] = [];
   private lastSignal: TradingSignal | null = null;
   private initialCapital: number = 100000; // 100,000 USDT
+  private completedTrades: CompletedTrade[] = [];
+  private entrySignal: TradingSignal | null = null;
   // Crossover detection flags (updated on each analysis)
   private isBullishCrossover: boolean = false;
   private isBearishCrossover: boolean = false;
@@ -160,6 +163,7 @@ export class MomentumCrossoverStrategy {
    */
   private closePosition(currentPrice: number, reason: string): TradingSignal {
     const closedPosition = { ...this.currentPosition };
+    const timestamp = Date.now();
     
     this.updatePositionPnL(currentPrice);
     const grossPnL = this.currentPosition.unrealizedPnL;
@@ -171,7 +175,34 @@ export class MomentumCrossoverStrategy {
     
     this.totalPnL += netPnL;
     this.totalTrades++;
-    if (netPnL > 0) this.winningTrades++;
+    const isWin = netPnL > 0;
+    if (isWin) this.winningTrades++;
+
+    // Create CompletedTrade
+    const duration = timestamp - this.currentPosition.entryTime;
+    const completedTrade: CompletedTrade = {
+      strategyName: 'Momentum Crossover',
+      strategyType: 'MOMENTUM_CROSSOVER',
+      type: this.currentPosition.type as 'LONG' | 'SHORT',
+      entryPrice: this.currentPosition.entryPrice,
+      entryTime: this.currentPosition.entryTime,
+      entryReason: this.entrySignal?.reason || 'Unknown',
+      exitPrice: currentPrice,
+      exitTime: timestamp,
+      exitReason: reason,
+      quantity: this.currentPosition.quantity,
+      pnl: netPnL,
+      pnlPercent: netPnLPercent,
+      fees: fees,
+      duration: duration,
+      isWin: isWin
+    };
+
+    CompletedTradeRepository.saveCompletedTrade(completedTrade).catch(err => {
+      console.error('Failed to save completed trade:', err);
+    });
+    
+    this.completedTrades.unshift(completedTrade);
 
     this.currentPosition = {
       type: 'NONE',
@@ -182,14 +213,15 @@ export class MomentumCrossoverStrategy {
       unrealizedPnLPercent: 0
     };
 
-    this.lastTradeTime = Date.now();
+    this.lastTradeTime = timestamp;
+    this.entrySignal = null;
 
     const signalType = closedPosition.type === 'LONG' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
     const currentCapital = this.initialCapital + this.totalPnL;
     
     return {
       type: signalType,
-      timestamp: Date.now(),
+      timestamp: timestamp,
       price: currentPrice,
       rsi: 0,
       ema12: 0,
@@ -280,7 +312,6 @@ export class MomentumCrossoverStrategy {
         closeSignal.ma7 = ma7;
         closeSignal.ma25 = ma25;
         closeSignal.ma99 = ma99;
-        this.recordSignal(closeSignal);
         return closeSignal;
       }
 
@@ -365,7 +396,7 @@ export class MomentumCrossoverStrategy {
           currentCapital: this.initialCapital + this.totalPnL
         }
       };
-      this.recordSignal(buySignal);
+      this.entrySignal = buySignal;
       return buySignal;
     }
 
@@ -399,7 +430,7 @@ export class MomentumCrossoverStrategy {
           currentCapital: this.initialCapital + this.totalPnL
         }
       };
-      this.recordSignal(sellSignal);
+      this.entrySignal = sellSignal;
       return sellSignal;
     }
 
@@ -424,6 +455,9 @@ export class MomentumCrossoverStrategy {
    * Execute trade (simulation mode)
    */
   executeTrade(signal: TradingSignal): void {
+    // Enregistrer le signal dans l'historique
+    this.recordSignal(signal);
+    
     if (!this.config.simulationMode) {
       console.log('⚠️ Real trading not implemented yet');
       return;
@@ -431,9 +465,129 @@ export class MomentumCrossoverStrategy {
 
     if (signal.type === 'BUY' || signal.type === 'SELL') {
       console.log(`[Momentum] 📊 ${signal.type} signal at $${signal.price.toFixed(2)} | ${signal.reason}`);
+      
+      // Open position
+      this.currentPosition = {
+        type: signal.type === 'BUY' ? 'LONG' : 'SHORT',
+        entryPrice: signal.price,
+        entryTime: signal.timestamp,
+        quantity: 0.001, // Fixed quantity for simulation
+        unrealizedPnL: 0,
+        unrealizedPnLPercent: 0,
+      };
     } else if (signal.type === 'CLOSE_LONG' || signal.type === 'CLOSE_SHORT') {
       console.log(`[Momentum] 🔒 ${signal.type} at $${signal.price.toFixed(2)} | ${signal.reason}`);
+      
+      // Close position and calculate P&L
+      if (this.currentPosition.type !== 'NONE') {
+        const entryPrice = this.currentPosition.entryPrice;
+        const exitPrice = signal.price;
+        const quantity = this.currentPosition.quantity;
+        
+        let tradePnL = 0;
+        if (this.currentPosition.type === 'LONG') {
+          tradePnL = (exitPrice - entryPrice) * quantity;
+        } else {
+          tradePnL = (entryPrice - exitPrice) * quantity;
+        }
+        
+        // Update statistics
+        this.totalTrades++;
+        this.totalPnL += tradePnL;
+        if (tradePnL > 0) {
+          this.winningTrades++;
+        }
+        
+        // Update signal with P&L information
+        signal.position = {
+          type: this.currentPosition.type,
+          entryPrice: this.currentPosition.entryPrice,
+          entryTime: this.currentPosition.entryTime,
+          quantity: this.currentPosition.quantity,
+          unrealizedPnL: tradePnL,
+          unrealizedPnLPercent: (tradePnL / (entryPrice * quantity)) * 100,
+          totalPnL: this.totalPnL,
+          totalPnLPercent: (this.totalPnL / this.initialCapital) * 100,
+          fees: 0,
+          currentCapital: this.initialCapital + this.totalPnL
+        };
+        
+        console.log(`[Momentum] 💰 Trade closed: P&L = ${tradePnL >= 0 ? '+' : ''}${tradePnL.toFixed(2)} USDT | Total: ${this.totalPnL >= 0 ? '+' : ''}${this.totalPnL.toFixed(2)} USDT`);
+      }
+      
+      // Reset position
+      this.currentPosition = {
+        type: 'NONE',
+        entryPrice: 0,
+        entryTime: 0,
+        quantity: 0,
+        unrealizedPnL: 0,
+        unrealizedPnLPercent: 0,
+      };
     }
+  }
+
+  /**
+   * Restore strategy state from database trades
+   */
+  async restoreFromDatabase(trades: any[]): Promise<void> {
+    console.log(`📥 Restoring Momentum Crossover strategy from ${trades.length} signals...`);
+
+    this.totalTrades = 0;
+    this.winningTrades = 0;
+    this.totalPnL = 0;
+    this.signalHistory = [];
+    this.completedTrades = [];
+
+    this.completedTrades = await CompletedTradeRepository.getCompletedTradesByStrategy('Momentum Crossover', 100);
+    console.log(`📊 Loaded ${this.completedTrades.length} completed trades`);
+    
+    this.totalTrades = this.completedTrades.length;
+    this.winningTrades = this.completedTrades.filter(t => t.isWin).length;
+    this.totalPnL = this.completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+
+    if (trades.length > 0) {
+      this.signalHistory = trades.filter((t: any) => t.signal_type !== 'HOLD').slice(0, 50).map((t: any) => ({
+        type: t.signal_type,
+        timestamp: parseInt(t.timestamp),
+        price: parseFloat(t.price),
+        rsi: 0,
+        ema12: 0,
+        ema26: 0,
+        ema50: 0,
+        ema200: 0,
+        ma7: 0,
+        ma25: 0,
+        ma99: 0,
+        reason: t.reason || ''
+      }));
+
+      if (this.signalHistory.length > 0) {
+        this.lastSignal = this.signalHistory[0];
+      }
+
+      const latestTrade = trades[0];
+      if (latestTrade && (latestTrade.signal_type === 'BUY' || latestTrade.signal_type === 'SELL')) {
+        const hasClosingTrade = trades.some((t: any) => 
+          (t.signal_type === 'CLOSE_LONG' || t.signal_type === 'CLOSE_SHORT') &&
+          parseInt(t.timestamp) > parseInt(latestTrade.timestamp)
+        );
+
+        if (!hasClosingTrade && latestTrade.position_type !== 'NONE') {
+          this.currentPosition = {
+            type: latestTrade.position_type,
+            entryPrice: parseFloat(latestTrade.entry_price),
+            entryTime: latestTrade.entry_time ? new Date(latestTrade.entry_time).getTime() : parseInt(latestTrade.timestamp),
+            quantity: parseFloat(latestTrade.quantity),
+            unrealizedPnL: 0,
+            unrealizedPnLPercent: 0
+          };
+          console.log(`   Restored open ${this.currentPosition.type} position @ ${this.currentPosition.entryPrice.toFixed(2)}`);
+        }
+      }
+    }
+
+    console.log(`   ✅ Restored: ${this.totalTrades} trades (${this.winningTrades} wins), Win Rate: ${this.totalTrades > 0 ? ((this.winningTrades/this.totalTrades)*100).toFixed(1) : 0}%, PnL: ${this.totalPnL.toFixed(2)} USDT`);
   }
 
   /**
@@ -450,92 +604,17 @@ export class MomentumCrossoverStrategy {
       lastSignal: this.lastSignal,
       signalHistory: [...this.signalHistory],
       currentCapital,
+      completedTrades: this.completedTrades,
       isBullishCrossover: this.isBullishCrossover,
       isBearishCrossover: this.isBearishCrossover
     };
   }
 
   /**
-   * Restore strategy state from database trades
+   * Get all trades for this strategy
    */
-  restoreFromDatabase(trades: any[]): void {
-    if (trades.length === 0) return;
-
-    console.log(`📥 Restoring Momentum Crossover strategy from ${trades.length} trades...`);
-
-    // Count closed trades
-    const closeTrades = trades.filter((t: any) => 
-      t.signal_type === 'CLOSE_LONG' || t.signal_type === 'CLOSE_SHORT'
-    );
-
-    this.totalTrades = closeTrades.length;
-    
-    // Get the most recent total_pnl (it's already cumulative)
-    const mostRecentTrade = trades[0];
-    this.totalPnL = mostRecentTrade && mostRecentTrade.total_pnl ? parseFloat(mostRecentTrade.total_pnl) : 0;
-    
-    // Count wins from individual trades (use pnl field, not total_pnl)
-    this.winningTrades = closeTrades.filter((t: any) => {
-      const tradePnl = parseFloat(t.pnl) || 0;
-      return tradePnl > 0;
-    }).length;
-
-    const latestTrade = trades[0];
-    if (latestTrade && (latestTrade.signal_type === 'BUY' || latestTrade.signal_type === 'SELL')) {
-      const hasClosingTrade = trades.some((t: any) => 
-        (t.signal_type === 'CLOSE_LONG' || t.signal_type === 'CLOSE_SHORT') &&
-        new Date(t.timestamp) > new Date(latestTrade.timestamp)
-      );
-
-      if (!hasClosingTrade && latestTrade.position_type !== 'NONE') {
-        this.currentPosition = {
-          type: latestTrade.position_type,
-          entryPrice: parseFloat(latestTrade.entry_price),
-          entryTime: new Date(latestTrade.entry_time).getTime(),
-          quantity: parseFloat(latestTrade.quantity),
-          unrealizedPnL: parseFloat(latestTrade.unrealized_pnl) || 0,
-          unrealizedPnLPercent: parseFloat(latestTrade.unrealized_pnl_percent) || 0
-        };
-        console.log(`   Restored open ${this.currentPosition.type} position @ ${this.currentPosition.entryPrice.toFixed(2)}`);
-      }
-    }
-
-    // Restore signal history (last 50 signals)
-    this.signalHistory = trades
-      .filter((t: any) => t.signal_type !== 'HOLD')
-      .slice(0, 50)
-      .map((t: any) => ({
-        type: t.signal_type,
-        timestamp: new Date(t.timestamp).getTime(),
-        price: parseFloat(t.price),
-        rsi: 0,
-        ema12: 0,
-        ema26: 0,
-        ema50: 0,
-        ema200: 0,
-        ma7: 0,
-        ma25: 0,
-        ma99: 0,
-        reason: t.reason || '',
-        position: t.position_type !== 'NONE' ? {
-          type: t.position_type,
-          entryPrice: parseFloat(t.entry_price),
-          entryTime: new Date(t.entry_time).getTime(),
-          quantity: parseFloat(t.quantity),
-          unrealizedPnL: parseFloat(t.unrealized_pnl) || 0,
-          unrealizedPnLPercent: parseFloat(t.unrealized_pnl_percent) || 0,
-          totalPnL: parseFloat(t.total_pnl) || 0,
-          totalPnLPercent: parseFloat(t.total_pnl_percent) || 0,
-          fees: parseFloat(t.fees) || 0,
-          currentCapital: parseFloat(t.current_capital) || 100000
-        } : undefined
-      }));
-
-    if (this.signalHistory.length > 0) {
-      this.lastSignal = this.signalHistory[0];
-    }
-
-    console.log(`   ✅ Restored: ${this.totalTrades} trades, ${this.winningTrades} wins, ${this.totalPnL.toFixed(2)} USDT total PnL, ${this.signalHistory.length} signals in history`);
+  getAllTrades(): any[] {
+    return [];
   }
 }
 

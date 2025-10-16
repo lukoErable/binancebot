@@ -16,8 +16,9 @@ export class TradeRepository {
           strategy_name, strategy_type, signal_type, price, timestamp, reason,
           position_type, entry_price, entry_time, quantity,
           unrealized_pnl, unrealized_pnl_percent, 
-          total_pnl, total_pnl_percent, fees, current_capital
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          total_pnl, total_pnl_percent, fees, current_capital,
+          rsi, ema12, ema26, ema50, ema200, metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
       `;
 
       const values = [
@@ -30,13 +31,23 @@ export class TradeRepository {
         signal.position?.type || 'NONE',
         signal.position?.entryPrice || null,
         signal.position?.entryTime ? new Date(signal.position.entryTime) : null, // entry_time is TIMESTAMP WITH TIME ZONE
-        signal.position?.quantity || null,
+        signal.position?.quantity || 0, // Required field, use 0 if not provided
         signal.position?.unrealizedPnL || null,
         signal.position?.unrealizedPnLPercent || null,
         signal.position?.totalPnL || null,
         signal.position?.totalPnLPercent || null,
         signal.position?.fees || null,
-        signal.position?.currentCapital || null
+        signal.position?.currentCapital || null,
+        signal.rsi || null,
+        signal.ema12 || null,
+        signal.ema26 || null,
+        signal.ema50 || null,
+        signal.ema200 || null,
+        JSON.stringify({
+          ma7: signal.ma7,
+          ma25: signal.ma25,
+          ma99: signal.ma99
+        })
       ];
 
       await pool.query(query, values);
@@ -63,9 +74,10 @@ export class TradeRepository {
       `;
       
       const result = await pool.query(query, [strategyName, limit]);
+      console.log(`📊 Fetched ${result.rows.length} trades for "${strategyName}"`);
       return result.rows;
     } catch (error) {
-      console.error('❌ Error fetching trades:', error);
+      console.error(`❌ Error fetching trades for "${strategyName}":`, error);
       return [];
     }
   }

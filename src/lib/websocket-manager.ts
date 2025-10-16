@@ -189,7 +189,9 @@ export class BinanceWebSocketManager {
           }
           
           // Analyze market and check for signals
-          this.analyzeAndExecute();
+          this.analyzeAndExecute().catch(error => {
+            console.error('❌ Error in analyzeAndExecute:', error);
+          });
         } else {
           // Update current price in real-time for smooth display
           this.state.currentPrice = parseFloat(kline.c);
@@ -217,14 +219,16 @@ export class BinanceWebSocketManager {
   /**
    * Analyze market and execute trades if signal detected
    */
-  private analyzeAndExecute(): void {
+  private async analyzeAndExecute(): Promise<void> {
     // Always analyze with strategy manager for multi-strategy support
-    this.strategyManager.analyzeAllStrategies(this.candles);
+    await this.strategyManager.analyzeAllStrategies(this.candles);
     
     // Get the best performing strategy for display
     const performances = this.strategyManager.getAllPerformances();
     const bestStrategyData = this.strategyManager.getBestStrategy();
     const bestStrategy = bestStrategyData ? bestStrategyData.performance : null;
+    
+    // Signal saving is now handled by StrategyManager with duplicate checking
     
     // Always calculate and update indicators from the first active strategy
     const activeStrategy = performances.find(p => p.isActive);

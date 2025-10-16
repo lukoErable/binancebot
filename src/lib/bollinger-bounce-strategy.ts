@@ -1,5 +1,6 @@
-import { Candle, Position, TradingSignal } from '@/types/trading';
+import { Candle, CompletedTrade, Position, TradingSignal } from '@/types/trading';
 import { BollingerBands, RSI } from 'technicalindicators';
+import CompletedTradeRepository from './db/completed-trade-repository';
 
 export interface BollingerBounceConfig {
   bbPeriod: number;        // Période des Bollinger Bands (défaut: 20)
@@ -40,9 +41,46 @@ export class BollingerBounceStrategy {
   private signalHistory: TradingSignal[] = [];
   private lastSignal: TradingSignal | null = null;
   private initialCapital: number = 100000; // 100,000 USDT
+  private completedTrades: CompletedTrade[] = [];
+  private entrySignal: TradingSignal | null = null;
 
   constructor(config: BollingerBounceConfig = defaultBollingerBounceConfig) {
     this.config = config;
+  }
+
+  /**
+   * Helper: Create and save CompletedTrade
+   */
+  private saveCompletedTrade(exitPrice: number, exitReason: string, pnl: number): void {
+    const timestamp = Date.now();
+    const duration = timestamp - this.currentPosition.entryTime;
+    const pnlPercent = (pnl / (this.currentPosition.entryPrice * this.currentPosition.quantity)) * 100;
+    const isWin = pnl > 0;
+
+    const completedTrade: CompletedTrade = {
+      strategyName: 'Bollinger Bounce',
+      strategyType: 'BOLLINGER_BOUNCE',
+      type: this.currentPosition.type as 'LONG' | 'SHORT',
+      entryPrice: this.currentPosition.entryPrice,
+      entryTime: this.currentPosition.entryTime,
+      entryReason: this.entrySignal?.reason || 'Unknown',
+      exitPrice: exitPrice,
+      exitTime: timestamp,
+      exitReason: exitReason,
+      quantity: this.currentPosition.quantity,
+      pnl: pnl,
+      pnlPercent: pnlPercent,
+      fees: 0,
+      duration: duration,
+      isWin: isWin
+    };
+
+    CompletedTradeRepository.saveCompletedTrade(completedTrade).catch(err => {
+      console.error('Failed to save completed trade:', err);
+    });
+    
+    this.completedTrades.unshift(completedTrade);
+    this.entrySignal = null;
   }
 
   /**
@@ -194,6 +232,8 @@ export class BollingerBounceStrategy {
         this.totalTrades++;
         if (pnl < 0) this.losingTrades++;
 
+        this.saveCompletedTrade(currentPrice, `🛑 Stop Loss (${this.currentPosition.unrealizedPnLPercent.toFixed(2)}%)`, pnl);
+
         const signal: TradingSignal = {
           type: 'CLOSE_LONG',
           price: currentPrice,
@@ -219,7 +259,6 @@ export class BollingerBounceStrategy {
           unrealizedPnLPercent: 0
         };
 
-        this.recordSignal(signal);
         return signal;
       }
 
@@ -241,6 +280,8 @@ export class BollingerBounceStrategy {
         if (reachedTakeProfit) reason = `🎯 Take Profit (${this.currentPosition.unrealizedPnLPercent.toFixed(2)}%)`;
         else if (reachedUpperBand) reason = `📊 Upper Band (${this.currentPosition.unrealizedPnLPercent.toFixed(2)}%)`;
         else reason = `📈 Middle Band + RSI ${rsi.toFixed(0)} (${this.currentPosition.unrealizedPnLPercent.toFixed(2)}%)`;
+
+        this.saveCompletedTrade(currentPrice, reason, pnl);
 
         const signal: TradingSignal = {
           type: 'CLOSE_LONG',
@@ -267,7 +308,6 @@ export class BollingerBounceStrategy {
           unrealizedPnLPercent: 0
         };
 
-        this.recordSignal(signal);
         return signal;
       }
     }
@@ -307,7 +347,7 @@ export class BollingerBounceStrategy {
           strength: hasVolumeConfirmation ? 'HIGH' : 'MEDIUM'
         };
 
-        this.recordSignal(signal);
+        this.entrySignal = signal;
         return signal;
       }
     }
@@ -342,6 +382,7 @@ export class BollingerBounceStrategy {
     lastSignal: TradingSignal | null; 
     signalHistory: TradingSignal[]; 
     currentCapital: number;
+    completedTrades: CompletedTrade[];
   } {
     const winRate = this.totalTrades > 0 ? (this.winningTrades / this.totalTrades) * 100 : 0;
     const currentCapital = this.initialCapital + this.totalPnL + this.currentPosition.unrealizedPnL;
@@ -354,7 +395,8 @@ export class BollingerBounceStrategy {
       winRate,
       lastSignal: this.lastSignal,
       signalHistory: [...this.signalHistory],
-      currentCapital
+      currentCapital,
+      completedTrades: this.completedTrades
     };
   }
 
@@ -362,6 +404,9 @@ export class BollingerBounceStrategy {
    * Execute trade (required by StrategyManager)
    */
   async executeTrade(signal: TradingSignal): Promise<void> {
+    // Enregistrer le signal dans l'historique
+    this.recordSignal(signal);
+    
     // In backtesting mode, we don't execute real trades
     // The signal is already processed in analyzeMarket
     console.log(`[Bollinger Bounce] ${signal.type} signal at $${signal.price.toFixed(2)}: ${signal.reason}`);
@@ -385,6 +430,75 @@ export class BollingerBounceStrategy {
       losingTrades: this.losingTrades,
       winRate: this.totalTrades > 0 ? (this.winningTrades / this.totalTrades) * 100 : 0
     };
+  }
+
+  /**
+   * Restore strategy state from database
+   */
+  async restoreFromDatabase(trades: any[]): Promise<void> {
+    console.log(`📥 [Bollinger Bounce] Restoring from ${trades.length} signals...`);
+
+    this.totalTrades = 0;
+    this.winningTrades = 0;
+    this.losingTrades = 0;
+    this.totalPnL = 0;
+    this.signalHistory = [];
+    this.completedTrades = [];
+
+    this.completedTrades = await CompletedTradeRepository.getCompletedTradesByStrategy('Bollinger Bounce', 100);
+    console.log(`📊 Loaded ${this.completedTrades.length} completed trades`);
+    
+    this.totalTrades = this.completedTrades.length;
+    this.winningTrades = this.completedTrades.filter(t => t.isWin).length;
+    this.losingTrades = this.totalTrades - this.winningTrades;
+    this.totalPnL = this.completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+
+    if (trades.length === 0) {
+      console.log(`   ✅ Restored: ${this.totalTrades} trades (${this.winningTrades} wins), Win Rate: ${this.totalTrades > 0 ? ((this.winningTrades/this.totalTrades)*100).toFixed(1) : 0}%, PnL: ${this.totalPnL.toFixed(2)} USDT`);
+      return;
+    }
+
+    this.signalHistory = trades.filter((t: any) => t.signal_type !== 'HOLD').slice(0, 50).map((t: any) => ({
+      type: t.signal_type,
+      timestamp: parseInt(t.timestamp),
+      price: parseFloat(t.price),
+      rsi: 0,
+      ema12: 0,
+      ema26: 0,
+      ema50: 0,
+      ema200: 0,
+      ma7: 0,
+      ma25: 0,
+      ma99: 0,
+      reason: t.reason || ''
+    }));
+
+    if (this.signalHistory.length > 0) {
+      this.lastSignal = this.signalHistory[0];
+    }
+
+    const latestTrade = trades[0];
+    if (latestTrade && latestTrade.signal_type === 'BUY') {
+      const hasClosingTrade = trades.some((t: any) => 
+        t.signal_type === 'CLOSE_LONG' &&
+        parseInt(t.timestamp) > parseInt(latestTrade.timestamp)
+      );
+
+      if (!hasClosingTrade && latestTrade.position_type !== 'NONE') {
+        this.currentPosition = {
+          type: 'LONG',
+          entryPrice: parseFloat(latestTrade.entry_price),
+          entryTime: latestTrade.entry_time ? new Date(latestTrade.entry_time).getTime() : parseInt(latestTrade.timestamp),
+          quantity: parseFloat(latestTrade.quantity),
+          unrealizedPnL: 0,
+          unrealizedPnLPercent: 0
+        };
+        console.log(`   Restored open LONG position @ ${this.currentPosition.entryPrice.toFixed(2)}`);
+      }
+    }
+
+    const winRate = this.totalTrades > 0 ? (this.winningTrades / this.totalTrades) * 100 : 0;
+    console.log(`✅ [Bollinger Bounce] Restored: ${this.totalTrades} trades (${this.winningTrades} wins), Win Rate: ${winRate.toFixed(1)}%, PnL: ${this.totalPnL.toFixed(2)} USDT`);
   }
 
   /**

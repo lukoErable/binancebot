@@ -5,6 +5,7 @@ import TradeRepository from './db/trade-repository';
 import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
 import { MomentumCrossoverStrategy, momentumStrategyConfig } from './momentum-strategy';
 import { NeuralScalperStrategy, neuralScalperConfig } from './neural-scalper-strategy';
+import { TrendFollowerStrategy, trendFollowerConfig } from './trend-follower-strategy';
 import { VolumeMACDStrategy, volumeMACDStrategyConfig } from './volume-macd-strategy';
 
 /**
@@ -13,10 +14,11 @@ import { VolumeMACDStrategy, volumeMACDStrategyConfig } from './volume-macd-stra
  */
 export class StrategyManager {
   private strategies: Map<string, {
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy;
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE';
+    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy | TrendFollowerStrategy;
+    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER';
     isActive: boolean;
   }>;
+  private savingSignals: Set<string> = new Set(); // Verrou pour éviter les sauvegardes multiples
 
   constructor() {
     this.strategies = new Map();
@@ -27,6 +29,7 @@ export class StrategyManager {
     this.addStrategy('Volume Breakout', new VolumeMACDStrategy(volumeMACDStrategyConfig), 'VOLUME_MACD', false);
     this.addStrategy('Neural Scalper', new NeuralScalperStrategy(neuralScalperConfig), 'NEURAL_SCALPER', false);
     this.addStrategy('Bollinger Bounce', new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', false);
+    this.addStrategy('Trend Follower', new TrendFollowerStrategy(trendFollowerConfig), 'TREND_FOLLOWER', false);
     
     // Load strategy states from database
     this.loadFromDatabase();
@@ -35,7 +38,7 @@ export class StrategyManager {
   /**
    * Load strategy states from database
    */
-  private async loadFromDatabase() {
+  private async loadFromDatabase(): Promise<void> {
     try {
       // Load strategy activation states
       const strategies = await StrategyRepository.getAllStrategies();
@@ -54,10 +57,15 @@ export class StrategyManager {
         try {
           const trades = await TradeRepository.getTradesByStrategy(strategyName, 100);
           if (trades.length > 0) {
-            console.log(`📈 Loaded ${trades.length} trades for ${strategyName}`);
+            console.log(`📈 Loaded ${trades.length} signals for ${strategyName}`);
             // Restore strategy state from trades
             if ('restoreFromDatabase' in strategyData.strategy) {
-              (strategyData.strategy as any).restoreFromDatabase(trades);
+              const restoreMethod = (strategyData.strategy as any).restoreFromDatabase;
+              // Call with await if it returns a Promise
+              const result = restoreMethod.call(strategyData.strategy, trades);
+              if (result instanceof Promise) {
+                await result;
+              }
             }
           }
         } catch (error) {
@@ -74,8 +82,8 @@ export class StrategyManager {
    */
   addStrategy(
     name: string,
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy,
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE',
+    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy | TrendFollowerStrategy,
+    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER',
     isActive: boolean = true
   ): void {
     this.strategies.set(name, { strategy, type, isActive });
@@ -115,43 +123,65 @@ export class StrategyManager {
   /**
    * Analyze market with all active strategies
    */
-  analyzeAllStrategies(candles: Candle[]): void {
-    this.strategies.forEach((strategyData, name) => {
-      if (!strategyData.isActive) return;
+  async analyzeAllStrategies(candles: Candle[]): Promise<void> {
+    for (const [name, strategyData] of this.strategies) {
+      if (!strategyData.isActive) continue;
 
       const signal = strategyData.strategy.analyzeMarket(candles);
       if (signal && signal.type !== 'HOLD') {
         console.log(`[${name}] Signal: ${signal.type} at $${signal.price.toFixed(2)} | ${signal.reason}`);
-        strategyData.strategy.executeTrade(signal);
         
-        // Check if this signal is different from the last saved one
-        const positionInfo = strategyData.strategy.getPositionInfo();
-        const lastSignal = positionInfo.lastSignal;
-        
-        // Only save if:
-        // ALWAYS save CLOSE signals and position opening signals
-        // For other signals, check for duplicates
+        // Vérifier et sauvegarder AVANT d'exécuter le trade (pour ne pas modifier lastSignal)
         const isPositionSignal = signal.type === 'BUY' || signal.type === 'SELL' || 
                                  signal.type === 'CLOSE_LONG' || signal.type === 'CLOSE_SHORT';
         
         if (isPositionSignal) {
-          // Check for real duplicates (same type, same price, within 1 second)
-          const isRealDuplicate = lastSignal && 
-                                  lastSignal.type === signal.type && 
-                                  Math.abs(lastSignal.price - signal.price) < 0.01 &&
-                                  (signal.timestamp - lastSignal.timestamp) < 1000;
+          // Récupérer le lastSignal AVANT executeTrade
+          const positionInfo = strategyData.strategy.getPositionInfo();
+          const lastSignal = positionInfo.lastSignal;
           
-          if (!isRealDuplicate) {
-            console.log(`💾 Saving position signal to DB: ${signal.type} @ ${signal.price.toFixed(2)}`);
-            TradeRepository.saveTrade(name, strategyData.type, signal).catch(err => {
+          // Duplicata = même type + même prix exact + moins de 2 secondes
+          const isMemoryDuplicate = lastSignal && 
+                                   lastSignal.type === signal.type && 
+                                   Math.abs(lastSignal.price - signal.price) < 0.5 &&
+                                   (signal.timestamp - lastSignal.timestamp) < 2000;
+          
+          if (!isMemoryDuplicate) {
+            // Créer une clé unique (sans timestamp pour éviter les doublons à la milliseconde près)
+            const signalKey = `${name}-${signal.type}-${signal.price.toFixed(2)}`;
+            
+            // Vérifier si ce signal est déjà en cours de sauvegarde (ATOMIC CHECK + ADD)
+            if (this.savingSignals.has(signalKey)) {
+              console.log(`⏭️  Signal already being saved: ${signal.type} @ ${signal.price.toFixed(2)}`);
+              return; // Skip immediately
+            }
+            
+            // Marquer comme en cours de sauvegarde AVANT l'await (synchrone, donc atomic)
+            this.savingSignals.add(signalKey);
+            console.log(`💾 Saving ${signal.type} signal to DB: ${signal.type} @ ${signal.price.toFixed(2)}`);
+            
+            try {
+              // Attendre que la sauvegarde soit terminée avant d'exécuter le trade
+              await TradeRepository.saveTrade(name, strategyData.type, signal);
+              
+              // Exécuter le trade SEULEMENT après la sauvegarde
+              strategyData.strategy.executeTrade(signal);
+            } catch (err) {
               console.error(`Failed to save trade for ${name}:`, err);
-            });
+            } finally {
+              // Retirer du verrou après un délai plus long (5 secondes)
+              setTimeout(() => this.savingSignals.delete(signalKey), 5000);
+            }
           } else {
-            console.log(`⏭️  Skipping real duplicate: ${signal.type} @ ${signal.price.toFixed(2)} (saved ${((signal.timestamp - lastSignal.timestamp) / 1000).toFixed(1)}s ago)`);
+            console.log(`⏭️  Skipping duplicate: ${signal.type} @ ${signal.price.toFixed(2)} (saved ${((signal.timestamp - lastSignal.timestamp) / 1000).toFixed(1)}s ago)`);
+            // Ne pas exécuter executeTrade pour les duplicatas
           }
+        } else {
+          // Pour les autres types de signaux, exécuter normalement
+          strategyData.strategy.executeTrade(signal);
         }
       }
-    });
+    }
   }
 
   /**
@@ -176,17 +206,18 @@ export class StrategyManager {
         currentPosition: positionInfo.position,
         lastSignal: positionInfo.lastSignal || null,
         signalHistory: positionInfo.signalHistory || [],
+        completedTrades: 'completedTrades' in positionInfo ? (positionInfo as any).completedTrades : undefined,
         isActive: strategyData.isActive,
         currentCapital: positionInfo.currentCapital || 100000,
         // Include strategy-specific flags
-        isBullishCrossover: 'isBullishCrossover' in positionInfo ? positionInfo.isBullishCrossover : undefined,
-        isBearishCrossover: 'isBearishCrossover' in positionInfo ? positionInfo.isBearishCrossover : undefined,
-        isVolumeBreakout: 'isVolumeBreakout' in positionInfo ? positionInfo.isVolumeBreakout : undefined,
-        isMACDBullish: 'isMACDBullish' in positionInfo ? positionInfo.isMACDBullish : undefined,
-        isMACDBearish: 'isMACDBearish' in positionInfo ? positionInfo.isMACDBearish : undefined,
-        isPriceAccelerating: 'isPriceAccelerating' in positionInfo ? positionInfo.isPriceAccelerating : undefined,
-        isVolatilityHigh: 'isVolatilityHigh' in positionInfo ? positionInfo.isVolatilityHigh : undefined,
-        isMomentumStrong: 'isMomentumStrong' in positionInfo ? positionInfo.isMomentumStrong : undefined
+        isBullishCrossover: 'isBullishCrossover' in positionInfo ? (positionInfo as any).isBullishCrossover : undefined,
+        isBearishCrossover: 'isBearishCrossover' in positionInfo ? (positionInfo as any).isBearishCrossover : undefined,
+        isVolumeBreakout: 'isVolumeBreakout' in positionInfo ? (positionInfo as any).isVolumeBreakout : undefined,
+        isMACDBullish: 'isMACDBullish' in positionInfo ? (positionInfo as any).isMACDBullish : undefined,
+        isMACDBearish: 'isMACDBearish' in positionInfo ? (positionInfo as any).isMACDBearish : undefined,
+        isPriceAccelerating: 'isPriceAccelerating' in positionInfo ? (positionInfo as any).isPriceAccelerating : undefined,
+        isVolatilityHigh: 'isVolatilityHigh' in positionInfo ? (positionInfo as any).isVolatilityHigh : undefined,
+        isMomentumStrong: 'isMomentumStrong' in positionInfo ? (positionInfo as any).isMomentumStrong : undefined
       });
     });
 
@@ -216,7 +247,7 @@ export class StrategyManager {
   /**
    * Get strategy by name
    */
-  getStrategy(name: string): TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy | undefined {
+  getStrategy(name: string): TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy | TrendFollowerStrategy | undefined {
     return this.strategies.get(name)?.strategy;
   }
 
@@ -246,8 +277,12 @@ export class StrategyManager {
     }
 
     try {
-      // Delete all trades from database
+      // Delete all signals from database
       await TradeRepository.deleteStrategyTrades(name);
+      
+      // Delete all completed trades from database
+      const { CompletedTradeRepository } = await import('./db/completed-trade-repository');
+      await CompletedTradeRepository.deleteStrategyCompletedTrades(name);
       
       // Reset strategy state by removing and re-adding it
       const strategyType = strategyData.type;
@@ -272,6 +307,9 @@ export class StrategyManager {
       } else if (strategyType === 'BOLLINGER_BOUNCE') {
         const { BollingerBounceStrategy, defaultBollingerBounceConfig } = await import('./bollinger-bounce-strategy');
         this.addStrategy(name, new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', false);
+      } else if (strategyType === 'TREND_FOLLOWER') {
+        const { TrendFollowerStrategy, trendFollowerConfig } = await import('./trend-follower-strategy');
+        this.addStrategy(name, new TrendFollowerStrategy(trendFollowerConfig), 'TREND_FOLLOWER', false);
       }
       
       console.log(`✅ Strategy "${name}" has been reset to initial state`);
