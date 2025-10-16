@@ -89,6 +89,35 @@ export async function GET(request: NextRequest) {
     return Response.json({ success: false, message: 'No active connection' }, { status: 400 });
   }
 
+  if (action === 'toggleTrading') {
+    if (wsManager) {
+      try {
+        wsManager.setTradingMode(trading);
+        return Response.json({ success: true, message: `Trading mode set to ${trading}` });
+      } catch (error) {
+        return Response.json({ success: false, error: 'Failed to toggle trading mode' }, { status: 500 });
+      }
+    }
+    return Response.json({ success: false, message: 'No active connection' }, { status: 400 });
+  }
+
+  if (action === 'getStrategies') {
+    if (wsManager) {
+      const performances = wsManager.getStrategyPerformances();
+      return Response.json({ success: true, strategies: performances });
+    }
+    return Response.json({ success: false, message: 'No active connection' }, { status: 400 });
+  }
+
+  if (action === 'toggleStrategy') {
+    const strategyName = searchParams.get('strategyName');
+    if (wsManager && strategyName) {
+      const newState = wsManager.toggleStrategy(strategyName);
+      return Response.json({ success: true, isActive: newState });
+    }
+    return Response.json({ success: false, message: 'No active connection or missing strategy name' }, { status: 400 });
+  }
+
   if (action === 'status') {
     if (wsManager) {
       const state = wsManager.getState();
@@ -98,5 +127,41 @@ export async function GET(request: NextRequest) {
   }
 
   return Response.json({ error: 'Invalid action' }, { status: 400 });
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { action, strategyName } = body;
+
+    if (action === 'resetStrategy') {
+      if (!strategyName) {
+        return Response.json({ error: 'Strategy name is required' }, { status: 400 });
+      }
+
+      if (!wsManager) {
+        return Response.json({ error: 'WebSocket manager not initialized' }, { status: 400 });
+      }
+
+      console.log(`🔄 Resetting strategy: ${strategyName}`);
+      const success = await wsManager.resetStrategy(strategyName);
+
+      if (success) {
+        return Response.json({ 
+          success: true, 
+          message: `Strategy "${strategyName}" has been reset successfully` 
+        });
+      } else {
+        return Response.json({ 
+          error: `Failed to reset strategy "${strategyName}"` 
+        }, { status: 500 });
+      }
+    }
+
+    return Response.json({ error: 'Invalid action' }, { status: 400 });
+  } catch (error) {
+    console.error('Error in POST /api/trading:', error);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
+  }
 }
 

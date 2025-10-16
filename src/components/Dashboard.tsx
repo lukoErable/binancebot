@@ -1,8 +1,19 @@
 'use client';
 
-import { StrategyState, TradingSignal } from '@/types/trading';
+import { StrategyPerformance, StrategyState, TradingSignal } from '@/types/trading';
 import { useEffect, useState } from 'react';
 import BinanceChart from './BinanceChart';
+import {
+  ChartSkeleton,
+  CriteriaSkeleton,
+  FullPageSkeleton,
+  IndicatorSkeleton,
+  OHLCSkeleton,
+  SignalSkeleton,
+  StrategyPanelSkeleton,
+  TradingInfoSkeleton
+} from './SkeletonLoader';
+import StrategyPanel from './StrategyPanel';
 
 // Extend Window interface for tradingEventSource
 declare global {
@@ -16,12 +27,12 @@ export default function Dashboard() {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [selectedTimeframe, setSelectedTimeframe] = useState('1m');
-  const [tradingMode, setTradingMode] = useState(false);
-  const [showCriteria, setShowCriteria] = useState(false); // false = observation, true = trading
+  const [strategyPerformances, setStrategyPerformances] = useState<StrategyPerformance[]>([]);
+  const [selectedStrategy, setSelectedStrategy] = useState<string>('GLOBAL'); // 'GLOBAL' or strategy name
 
   const startDataStream = async (timeframe?: string, trading?: boolean) => {
     const tf = timeframe || selectedTimeframe;
-    const tm = trading !== undefined ? trading : tradingMode;
+    const tm = trading !== undefined ? trading : false; // Always start in monitoring mode
     
     setIsConnecting(true);
     try {
@@ -70,14 +81,14 @@ export default function Dashboard() {
     }
   };
 
-  const toggleTradingMode = () => {
-    const newTradingMode = !tradingMode;
-    setTradingMode(newTradingMode);
-    if (isConnected) {
-      // Redémarrer avec le nouveau mode
-      stopDataStream().then(() => {
-        setTimeout(() => startDataStream(selectedTimeframe, newTradingMode), 1000);
-      });
+
+
+  const handleToggleStrategy = async (strategyName: string) => {
+    try {
+      await fetch(`/api/trading?action=toggleStrategy&strategyName=${encodeURIComponent(strategyName)}`);
+      // No need to refresh - data comes via SSE
+    } catch (error) {
+      console.error('Error toggling strategy:', error);
     }
   };
 
@@ -117,6 +128,13 @@ export default function Dashboard() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Update strategy performances from SSE data
+  useEffect(() => {
+    if (state?.strategyPerformances) {
+      setStrategyPerformances(state.strategyPerformances);
+    }
+  }, [state?.strategyPerformances]);
 
   const formatPrice = (price: number) => price.toFixed(2);
   const formatIndicator = (value: number) => value.toFixed(2);
@@ -160,9 +178,14 @@ export default function Dashboard() {
     return <span className="text-gray-500">➡️ Neutre</span>;
   };
 
-  const getTradingCriteria = () => {
+  // Get criteria for a specific strategy type
+  const getCriteriaForStrategy = (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE', strategyMetrics: StrategyPerformance) => {
     if (!state) return null;
-    
+
+    // Extract position from strategyMetrics
+    const position = strategyMetrics.currentPosition;
+    if (!position) return null;
+
     // Calculer le cooldown restant
     const now = Date.now();
     const lastTradeTime = state.lastSignal?.timestamp || 0;
@@ -176,8 +199,284 @@ export default function Dashboard() {
       if (isClose) return 'orange'; // Proche
       return 'gray'; // Par défaut
     };
-    
-    // Calculer les proximités
+
+    // Adapt criteria based on strategy type
+    if (strategyType === 'MOMENTUM_CROSSOVER') {
+      // For Momentum Crossover: Use REAL crossover detection from the strategy itself
+      // Get crossover flags from the specific strategy performance
+      
+      const ema12 = state.ema12 || 0;
+      const ema26 = state.ema26 || 0;
+      const ema200Distance = state.currentPrice - state.ema200;
+      
+      // For Momentum Crossover, we need to check if we're in a position or not
+      const hasNoPosition = position.type === 'NONE';
+      
+      // Get crossover flags from the Momentum strategy performance
+      let isBullishCrossover = false;
+      let isBearishCrossover = false;
+      
+      // If we have strategyMetrics with crossover flags, use them
+      if (strategyMetrics && 'isBullishCrossover' in strategyMetrics) {
+        isBullishCrossover = strategyMetrics.isBullishCrossover || false;
+        isBearishCrossover = strategyMetrics.isBearishCrossover || false;
+      }
+      
+      // LONG criteria: Use REAL bullish crossover from strategy
+      const isPriceAboveEma200 = state.currentPrice > state.ema200;
+      const longAllCriteria = isBullishCrossover && isPriceAboveEma200 && hasNoPosition && cooldownPassed;
+      
+      // SHORT criteria: Use REAL bearish crossover from strategy
+      const isPriceBelowEma200 = state.currentPrice < state.ema200;
+      const shortAllCriteria = isBearishCrossover && isPriceBelowEma200 && hasNoPosition && cooldownPassed;
+      
+      // Calculate proximity for orange status
+      const emaDiff = Math.abs(ema12 - ema26);
+      const emaPercent = (emaDiff / ema26) * 100;
+      const isEmaClose = emaPercent < 0.5; // Less than 0.5% difference
+      
+      const criteria = {
+        strategyType: 'MOMENTUM_CROSSOVER' as const,
+        long: {
+          emaCrossover: isBullishCrossover,
+          emaCrossoverStatus: getStatus(isBullishCrossover, isEmaClose && ema12 <= ema26),
+          priceAboveEma200: isPriceAboveEma200,
+          priceAboveEma200Status: getStatus(isPriceAboveEma200, Math.abs(ema200Distance) / state.ema200 < 0.01),
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 60000)
+        },
+        short: {
+          emaCrossover: isBearishCrossover,
+          emaCrossoverStatus: getStatus(isBearishCrossover, isEmaClose && ema12 >= ema26),
+          priceBelowEma200: isPriceBelowEma200,
+          priceBelowEma200Status: getStatus(isPriceBelowEma200, Math.abs(ema200Distance) / state.ema200 < 0.01),
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 60000)
+        },
+        cooldownRemaining: cooldownRemaining,
+        // Only show READY when crossover is detected by strategy
+        longReady: longAllCriteria,
+        shortReady: shortAllCriteria
+      };
+      return criteria;
+    }
+
+    // VOLUME_MACD Strategy
+    if (strategyType === 'VOLUME_MACD') {
+      // Get Volume + MACD specific flags from strategy performance
+      let isVolumeBreakout = false;
+      let isMACDBullish = false;
+      let isMACDBearish = false;
+      
+      if (strategyMetrics && 'isVolumeBreakout' in strategyMetrics) {
+        isVolumeBreakout = strategyMetrics.isVolumeBreakout || false;
+        isMACDBullish = strategyMetrics.isMACDBullish || false;
+        isMACDBearish = strategyMetrics.isMACDBearish || false;
+      }
+      
+      const hasNoPosition = position.type === 'NONE';
+      
+      // Calculate VWAP proximity (approximation for display)
+      const vwapAbove = state.currentPrice > state.ema50; // Using EMA50 as VWAP proxy
+      const vwapBelow = state.currentPrice < state.ema50;
+      
+      const longAllCriteria = isVolumeBreakout && isMACDBullish && vwapAbove && hasNoPosition && cooldownPassed;
+      const shortAllCriteria = isVolumeBreakout && isMACDBearish && vwapBelow && hasNoPosition && cooldownPassed;
+      
+      const criteria = {
+        strategyType: 'VOLUME_MACD' as const,
+        long: {
+          volumeBreakout: isVolumeBreakout,
+          volumeBreakoutStatus: getStatus(isVolumeBreakout, false),
+          macdBullish: isMACDBullish,
+          macdBullishStatus: getStatus(isMACDBullish, false),
+          priceAboveVWAP: vwapAbove,
+          priceAboveVWAPStatus: getStatus(vwapAbove, false),
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 60000)
+        },
+        short: {
+          volumeBreakout: isVolumeBreakout,
+          volumeBreakoutStatus: getStatus(isVolumeBreakout, false),
+          macdBearish: isMACDBearish,
+          macdBearishStatus: getStatus(isMACDBearish, false),
+          priceBelowVWAP: vwapBelow,
+          priceBelowVWAPStatus: getStatus(vwapBelow, false),
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 60000)
+        },
+        cooldownRemaining: cooldownRemaining,
+        longReady: longAllCriteria,
+        shortReady: shortAllCriteria
+      };
+      return criteria;
+    }
+
+    // NEURAL_SCALPER Strategy
+    if (strategyType === 'NEURAL_SCALPER') {
+      // Get Neural Scalper specific values from backend
+      let velocity = 0;
+      let acceleration = 0;
+      let rsiMomentum = 0;
+      let volumeSpike = false;
+      let isVolatilityHigh = false;
+      
+      if (strategyMetrics && 'velocity' in strategyMetrics) {
+        velocity = strategyMetrics.velocity || 0;
+        acceleration = strategyMetrics.acceleration || 0;
+        rsiMomentum = strategyMetrics.rsiMomentum || 0;
+        volumeSpike = strategyMetrics.volumeSpike || false;
+        isVolatilityHigh = strategyMetrics.isVolatilityHigh || false;
+      }
+      
+      const hasNoPosition = position.type === 'NONE';
+      const vwapAbove = state.currentPrice > state.ema50; // VWAP proxy
+      const vwapBelow = state.currentPrice < state.ema50;
+      
+      // Exact conditions from backend
+      // LONG: acceleration > 0 && velocity > 0 && (volumeSpike || volatilityHigh) && price > vwap && rsiMomentum > 1.5
+      const accelerationPositive = acceleration > 0;
+      const velocityPositive = velocity > 0;
+      const volumeOrVolatility = volumeSpike || isVolatilityHigh;
+      const rsiMomentumBullish = rsiMomentum > 1.5;
+      
+      const accelerationNegative = acceleration < 0;
+      const velocityNegative = velocity < 0;
+      const rsiMomentumBearish = rsiMomentum < -1.5;
+      
+      const longAllCriteria = accelerationPositive && velocityPositive && volumeOrVolatility && vwapAbove && rsiMomentumBullish && hasNoPosition && cooldownPassed;
+      const shortAllCriteria = accelerationNegative && velocityNegative && volumeOrVolatility && vwapBelow && rsiMomentumBearish && hasNoPosition && cooldownPassed;
+      
+      const criteria = {
+        strategyType: 'NEURAL_SCALPER' as const,
+        long: {
+          accelerationPositive: accelerationPositive,
+          accelerationPositiveStatus: getStatus(accelerationPositive, false),
+          accelerationValue: acceleration.toFixed(4),
+          velocityPositive: velocityPositive,
+          velocityPositiveStatus: getStatus(velocityPositive, false),
+          velocityValue: velocity.toFixed(4),
+          volumeOrVolatility: volumeOrVolatility,
+          volumeOrVolatilityStatus: getStatus(volumeOrVolatility, false),
+          volumeSpike: volumeSpike,
+          volatilityHigh: isVolatilityHigh,
+          priceAboveVWAP: vwapAbove,
+          priceAboveVWAPStatus: getStatus(vwapAbove, false),
+          rsiMomentumBullish: rsiMomentumBullish,
+          rsiMomentumBullishStatus: getStatus(rsiMomentumBullish, false),
+          rsiMomentumValue: rsiMomentum.toFixed(2),
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 15000)
+        },
+        short: {
+          accelerationNegative: accelerationNegative,
+          accelerationNegativeStatus: getStatus(accelerationNegative, false),
+          accelerationValue: acceleration.toFixed(4),
+          velocityNegative: velocityNegative,
+          velocityNegativeStatus: getStatus(velocityNegative, false),
+          velocityValue: velocity.toFixed(4),
+          volumeOrVolatility: volumeOrVolatility,
+          volumeOrVolatilityStatus: getStatus(volumeOrVolatility, false),
+          volumeSpike: volumeSpike,
+          volatilityHigh: isVolatilityHigh,
+          priceBelowVWAP: vwapBelow,
+          priceBelowVWAPStatus: getStatus(vwapBelow, false),
+          rsiMomentumBearish: rsiMomentumBearish,
+          rsiMomentumBearishStatus: getStatus(rsiMomentumBearish, false),
+          rsiMomentumValue: rsiMomentum.toFixed(2),
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 15000)
+        },
+        cooldownRemaining: cooldownRemaining,
+        longReady: longAllCriteria,
+        shortReady: shortAllCriteria
+      };
+      return criteria;
+    }
+
+    // BOLLINGER_BOUNCE Strategy
+    if (strategyType === 'BOLLINGER_BOUNCE') {
+      const hasNoPosition = position.type === 'NONE';
+      
+      // Approximate Bollinger Bands using EMA values
+      // Upper band ≈ EMA12, Middle ≈ EMA26, Lower ≈ EMA50 (approximation for display)
+      const upperBand = state.ema12 || state.currentPrice * 1.02;
+      const middleBand = state.ema26 || state.currentPrice;
+      const lowerBand = state.ema50 || state.currentPrice * 0.98;
+      
+      // Calculate distance from bands as percentage
+      const distanceFromLower = ((state.currentPrice - lowerBand) / lowerBand) * 100;
+      const distanceFromUpper = ((upperBand - state.currentPrice) / state.currentPrice) * 100;
+      
+      // LONG criteria: Price near lower band + RSI oversold
+      const nearLowerBand = distanceFromLower <= 1; // Within 1% of lower band
+      const nearLowerBandClose = distanceFromLower <= 2 && distanceFromLower > 1; // Between 1-2%
+      const rsiOversold = state.rsi < 45;
+      const rsiOversoldClose = state.rsi >= 45 && state.rsi < 50;
+      
+      // Calculate BB width (volatility indicator)
+      const bbWidth = ((upperBand - lowerBand) / middleBand) * 100;
+      const isVolatile = bbWidth > 3; // BB width > 3%
+      const isVolatilityClose = bbWidth > 2.5 && bbWidth <= 3;
+      
+      const longAllCriteria = nearLowerBand && rsiOversold && isVolatile && hasNoPosition;
+      
+      // SHORT criteria: Price near upper band + RSI overbought (moins utilisé)
+      const nearUpperBand = distanceFromUpper <= 1;
+      const nearUpperBandClose = distanceFromUpper <= 2 && distanceFromUpper > 1;
+      const rsiOverbought = state.rsi > 60;
+      const rsiOverboughtClose = state.rsi >= 55 && state.rsi <= 60;
+      
+      const shortAllCriteria = nearUpperBand && rsiOverbought && isVolatile && hasNoPosition;
+      
+      const criteria = {
+        strategyType: 'BOLLINGER_BOUNCE' as const,
+        long: {
+          nearLowerBand: nearLowerBand,
+          nearLowerBandStatus: getStatus(nearLowerBand, nearLowerBandClose),
+          distanceValue: `${distanceFromLower.toFixed(2)}%`,
+          rsiOversold: rsiOversold,
+          rsiOversoldStatus: getStatus(rsiOversold, rsiOversoldClose),
+          rsiValue: state.rsi.toFixed(0),
+          volatility: isVolatile,
+          volatilityStatus: getStatus(isVolatile, isVolatilityClose),
+          bbWidthValue: `${bbWidth.toFixed(1)}%`,
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false)
+        },
+        short: {
+          nearUpperBand: nearUpperBand,
+          nearUpperBandStatus: getStatus(nearUpperBand, nearUpperBandClose),
+          distanceValue: `${distanceFromUpper.toFixed(2)}%`,
+          rsiOverbought: rsiOverbought,
+          rsiOverboughtStatus: getStatus(rsiOverbought, rsiOverboughtClose),
+          rsiValue: state.rsi.toFixed(0),
+          volatility: isVolatile,
+          volatilityStatus: getStatus(isVolatile, isVolatilityClose),
+          bbWidthValue: `${bbWidth.toFixed(1)}%`,
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false)
+        },
+        cooldownRemaining: 0, // No cooldown for Bollinger Bounce
+        longReady: longAllCriteria,
+        shortReady: shortAllCriteria
+      };
+      return criteria;
+    }
+
+    // Default: RSI + EMA Strategy
     const emaDiff = Math.abs(state.ema50 - state.ema200);
     const emaPercent = (emaDiff / state.ema200) * 100;
     const isEmaClose = emaPercent < 1; // Moins de 1% de différence
@@ -188,25 +487,24 @@ export default function Dashboard() {
     const cooldownClose = cooldownRemaining > 0 && cooldownRemaining < 60000; // Moins d'1 minute
     
     const criteria = {
-      // Critères pour LONG
+      strategyType: 'RSI_EMA' as const,
       long: {
         emaTrend: state.ema50 > state.ema200,
         emaTrendStatus: getStatus(state.ema50 > state.ema200, isEmaClose && state.ema50 <= state.ema200),
         rsiOversold: state.rsi < 30,
         rsiOversoldStatus: getStatus(state.rsi < 30, longRsiClose),
-        noPosition: state.currentPosition.type === 'NONE',
-        noPositionStatus: getStatus(state.currentPosition.type === 'NONE', false),
+        noPosition: position.type === 'NONE',
+        noPositionStatus: getStatus(position.type === 'NONE', false),
         cooldownPassed: cooldownPassed,
         cooldownPassedStatus: getStatus(cooldownPassed, cooldownClose)
       },
-      // Critères pour SHORT
       short: {
         emaTrend: state.ema50 < state.ema200,
         emaTrendStatus: getStatus(state.ema50 < state.ema200, isEmaClose && state.ema50 >= state.ema200),
         rsiOverbought: state.rsi > 70,
         rsiOverboughtStatus: getStatus(state.rsi > 70, shortRsiClose),
-        noPosition: state.currentPosition.type === 'NONE',
-        noPositionStatus: getStatus(state.currentPosition.type === 'NONE', false),
+        noPosition: position.type === 'NONE',
+        noPositionStatus: getStatus(position.type === 'NONE', false),
         cooldownPassed: cooldownPassed,
         cooldownPassedStatus: getStatus(cooldownPassed, cooldownClose)
       },
@@ -216,21 +514,549 @@ export default function Dashboard() {
     return criteria;
   };
 
+  // Get trading criteria for selected strategy
+  const getTradingCriteria = () => {
+    if (!state) return null;
+
+    if (selectedStrategy === 'GLOBAL') {
+      // For global view, use the first RSI_EMA strategy if available
+      const rsiEmaStrategy = strategyPerformances.find(p => p.strategyType === 'RSI_EMA');
+      if (!rsiEmaStrategy) return null;
+      return getCriteriaForStrategy('RSI_EMA', rsiEmaStrategy);
+    }
+
+    // Get the selected strategy type
+    const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+    if (!selectedStrategyData) return null;
+
+    return getCriteriaForStrategy(selectedStrategyData.strategyType, selectedStrategyData);
+  };
+
   // Fonction pour obtenir la classe CSS du point en fonction du statut
-  const getStatusClass = (status: string) => {
-    switch (status) {
-      case 'green': return 'bg-green-400';
-      case 'orange': return 'bg-orange-400';
-      case 'gray': return 'bg-gray-600';
-      default: return 'bg-gray-600';
+  const getStatusClass = (status: string | boolean, allReady: boolean = false) => {
+    const statusStr = String(status);
+    switch (statusStr) {
+      case 'green': return allReady ? 'bg-green-500 shadow-lg shadow-green-500/50 animate-pulse' : 'bg-green-400/50';
+      case 'orange': return 'bg-orange-400/50';
+      case 'gray': return 'bg-gray-500/40';
+      default: return 'bg-gray-500/40';
+    }
+  };
+
+  // Strategy color mapping
+  const getStrategyColor = (strategyType: string) => {
+    switch (strategyType) {
+      case 'RSI_EMA':
+        return {
+          border: 'border-blue-400',
+          text: 'text-blue-400',
+          accent: 'bg-blue-400',
+          bgSelected: 'bg-blue-950/40'
+        };
+      case 'MOMENTUM_CROSSOVER':
+        return {
+          border: 'border-purple-400',
+          text: 'text-purple-400',
+          accent: 'bg-purple-400',
+          bgSelected: 'bg-purple-950/40'
+        };
+      case 'VOLUME_MACD':
+        return {
+          border: 'border-orange-400',
+          text: 'text-orange-400',
+          accent: 'bg-orange-400',
+          bgSelected: 'bg-orange-950/40'
+        };
+      case 'NEURAL_SCALPER':
+        return {
+          border: 'border-pink-400',
+          text: 'text-pink-400',
+          accent: 'bg-pink-400',
+          bgSelected: 'bg-pink-950/40'
+        };
+      case 'BOLLINGER_BOUNCE':
+        return {
+          border: 'border-teal-400',
+          text: 'text-teal-400',
+          accent: 'bg-teal-400',
+          bgSelected: 'bg-teal-950/40'
+        };
+      default:
+        return {
+          border: 'border-gray-400',
+          text: 'text-gray-400',
+          accent: 'bg-gray-400',
+          bgSelected: 'bg-gray-950/40'
+        };
+    }
+  };
+
+  // Get statuses array for a criteria object
+  const getStatusesArray = (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short'): string[] => {
+    const criteriaData = type === 'long' ? criteria.long : criteria.short;
+    
+    if (criteria.strategyType === 'MOMENTUM_CROSSOVER') {
+      return type === 'long'
+        ? [
+            criteriaData.emaCrossoverStatus as string,
+            criteriaData.priceAboveEma200Status as string
+          ]
+        : [
+            criteriaData.emaCrossoverStatus as string,
+            criteriaData.priceBelowEma200Status as string
+          ];
+    }
+    
+    if (criteria.strategyType === 'VOLUME_MACD') {
+      return type === 'long'
+        ? [
+            criteriaData.volumeBreakoutStatus as string,
+            criteriaData.macdBullishStatus as string,
+            criteriaData.priceAboveVWAPStatus as string
+          ]
+        : [
+            criteriaData.volumeBreakoutStatus as string,
+            criteriaData.macdBearishStatus as string,
+            criteriaData.priceBelowVWAPStatus as string
+          ];
+    }
+    
+    if (criteria.strategyType === 'NEURAL_SCALPER') {
+      return type === 'long'
+        ? [
+            criteriaData.accelerationPositiveStatus as string,
+            criteriaData.velocityPositiveStatus as string,
+            criteriaData.volumeOrVolatilityStatus as string,
+            criteriaData.priceAboveVWAPStatus as string,
+            criteriaData.rsiMomentumBullishStatus as string
+          ]
+        : [
+            criteriaData.accelerationNegativeStatus as string,
+            criteriaData.velocityNegativeStatus as string,
+            criteriaData.volumeOrVolatilityStatus as string,
+            criteriaData.priceBelowVWAPStatus as string,
+            criteriaData.rsiMomentumBearishStatus as string
+          ];
+    }
+    
+    if (criteria.strategyType === 'BOLLINGER_BOUNCE') {
+      return type === 'long'
+        ? [
+            criteriaData.nearLowerBandStatus as string,
+            criteriaData.rsiOversoldStatus as string,
+            criteriaData.volatilityStatus as string
+          ]
+        : [
+            criteriaData.nearUpperBandStatus as string,
+            criteriaData.rsiOverboughtStatus as string,
+            criteriaData.volatilityStatus as string
+          ];
+    }
+    
+    // RSI_EMA
+    return type === 'long'
+      ? [
+          criteriaData.emaTrendStatus as string,
+          criteriaData.rsiOversoldStatus as string
+        ]
+      : [
+          criteriaData.emaTrendStatus as string,
+          criteriaData.rsiOverboughtStatus as string
+        ];
+  };
+
+  // Get mini indicator statuses based on strategy type
+  const getMiniIndicatorStatuses = (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short') => {
+    const criteriaData = type === 'long' ? criteria.long : criteria.short;
+    
+    if (criteria.strategyType === 'MOMENTUM_CROSSOVER') {
+      return [
+        criteriaData.emaCrossoverStatus as string,
+        (criteriaData.priceAboveEma200Status || criteriaData.priceBelowEma200Status) as string
+      ];
+    }
+    
+    if (criteria.strategyType === 'VOLUME_MACD') {
+      return [
+        criteriaData.volumeBreakoutStatus as string,
+        (criteriaData.macdBullishStatus || criteriaData.macdBearishStatus) as string,
+        (criteriaData.priceAboveVWAPStatus || criteriaData.priceBelowVWAPStatus) as string
+      ];
+    }
+    
+    if (criteria.strategyType === 'NEURAL_SCALPER') {
+      return [
+        (criteriaData.accelerationPositiveStatus || criteriaData.accelerationNegativeStatus) as string,
+        (criteriaData.velocityPositiveStatus || criteriaData.velocityNegativeStatus) as string,
+        criteriaData.volumeOrVolatilityStatus as string,
+        (criteriaData.priceAboveVWAPStatus || criteriaData.priceBelowVWAPStatus) as string,
+        (criteriaData.rsiMomentumBullishStatus || criteriaData.rsiMomentumBearishStatus) as string
+      ];
+    }
+    
+    if (criteria.strategyType === 'BOLLINGER_BOUNCE') {
+      return [
+        (criteriaData.nearLowerBandStatus || criteriaData.nearUpperBandStatus) as string,
+        (criteriaData.rsiOversoldStatus || criteriaData.rsiOverboughtStatus) as string,
+        criteriaData.volatilityStatus as string
+      ];
+    }
+    
+    // RSI + EMA
+    return [
+      criteriaData.emaTrendStatus as string,
+      (criteriaData.rsiOversoldStatus || criteriaData.rsiOverboughtStatus) as string
+    ];
+  };
+
+  // Render criteria labels based on strategy type
+  const renderCriteriaLabels = (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short', _allReady: boolean = false) => {
+    const criteriaData = type === 'long' ? criteria.long : criteria.short;
+    
+    if (criteria.strategyType === 'MOMENTUM_CROSSOVER') {
+      // Momentum Crossover criteria
+      if (type === 'long') {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.emaCrossoverStatus === 'green' ? 'text-green-400' : criteriaData.emaCrossoverStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="EMA(12) > EMA(26) (croisement haussier)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.emaCrossoverStatus)}`}></span>
+              Cross↗
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.priceAboveEma200Status === 'green' ? 'text-green-400' : criteriaData.priceAboveEma200Status === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Prix > EMA(200)`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.priceAboveEma200Status)}`}></span>
+              P{'>'}200
+            </span>
+          </>
+        );
+      } else {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.emaCrossoverStatus === 'green' ? 'text-green-400' : criteriaData.emaCrossoverStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="EMA(12) < EMA(26) (croisement baissier)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.emaCrossoverStatus)}`}></span>
+              Cross↘
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.priceBelowEma200Status === 'green' ? 'text-green-400' : criteriaData.priceBelowEma200Status === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Prix < EMA(200)`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.priceBelowEma200Status)}`}></span>
+              P{'<'}200
+            </span>
+          </>
+        );
+      }
+    }
+    
+    // VOLUME_MACD Strategy
+    if (criteria.strategyType === 'VOLUME_MACD') {
+      if (type === 'long') {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.volumeBreakoutStatus === 'green' ? 'text-green-400' : criteriaData.volumeBreakoutStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="Volume > 2x moyenne (explosion de volume)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volumeBreakoutStatus)}`}></span>
+              Vol↑
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.macdBullishStatus === 'green' ? 'text-green-400' : criteriaData.macdBullishStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="MACD croisement haussier (histogram > 0)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.macdBullishStatus)}`}></span>
+              MACD↗
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.priceAboveVWAPStatus === 'green' ? 'text-green-400' : criteriaData.priceAboveVWAPStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="Prix > VWAP (au-dessus de la moyenne pondérée)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.priceAboveVWAPStatus)}`}></span>
+              P{'>'}VWAP
+            </span>
+          </>
+        );
+      } else {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.volumeBreakoutStatus === 'green' ? 'text-green-400' : criteriaData.volumeBreakoutStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="Volume > 2x moyenne (explosion de volume)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volumeBreakoutStatus)}`}></span>
+              Vol↑
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.macdBearishStatus === 'green' ? 'text-green-400' : criteriaData.macdBearishStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="MACD croisement baissier (histogram < 0)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.macdBearishStatus)}`}></span>
+              MACD↘
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.priceBelowVWAPStatus === 'green' ? 'text-green-400' : criteriaData.priceBelowVWAPStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="Prix < VWAP (en-dessous de la moyenne pondérée)"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.priceBelowVWAPStatus)}`}></span>
+              P{'<'}VWAP
+            </span>
+          </>
+        );
+      }
+    }
+    
+    // NEURAL_SCALPER Strategy - 6 conditions complètes
+    if (criteria.strategyType === 'NEURAL_SCALPER') {
+      if (type === 'long') {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.accelerationPositiveStatus === 'green' ? 'text-green-400' : criteriaData.accelerationPositiveStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Accélération > 0 (${criteriaData.accelerationValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.accelerationPositiveStatus)}`}></span>
+              Accel↗
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.velocityPositiveStatus === 'green' ? 'text-green-400' : criteriaData.velocityPositiveStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Vélocité > 0 (${criteriaData.velocityValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.velocityPositiveStatus)}`}></span>
+              Vel↗
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.volumeOrVolatilityStatus === 'green' ? 'text-green-400' : criteriaData.volumeOrVolatilityStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Volume spike: ${criteriaData.volumeSpike ? '✓' : '✗'} | Volatilité: ${criteriaData.volatilityHigh ? '✓' : '✗'}`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volumeOrVolatilityStatus)}`}></span>
+              {criteriaData.volumeSpike ? '📊' : '⚡'}Vol
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.priceAboveVWAPStatus === 'green' ? 'text-green-400' : criteriaData.priceAboveVWAPStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="Prix > VWAP"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.priceAboveVWAPStatus)}`}></span>
+              P{'>'}VWAP
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.rsiMomentumBullishStatus === 'green' ? 'text-green-400' : criteriaData.rsiMomentumBullishStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`RSI Momentum > 1.5 (${criteriaData.rsiMomentumValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.rsiMomentumBullishStatus)}`}></span>
+              RSI-M↗
+            </span>
+          </>
+        );
+      } else {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.accelerationNegativeStatus === 'green' ? 'text-green-400' : criteriaData.accelerationNegativeStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Accélération < 0 (${criteriaData.accelerationValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.accelerationNegativeStatus)}`}></span>
+              Accel↘
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.velocityNegativeStatus === 'green' ? 'text-green-400' : criteriaData.velocityNegativeStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Vélocité < 0 (${criteriaData.velocityValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.velocityNegativeStatus)}`}></span>
+              Vel↘
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.volumeOrVolatilityStatus === 'green' ? 'text-green-400' : criteriaData.volumeOrVolatilityStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Volume spike: ${criteriaData.volumeSpike ? '✓' : '✗'} | Volatilité: ${criteriaData.volatilityHigh ? '✓' : '✗'}`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volumeOrVolatilityStatus)}`}></span>
+              {criteriaData.volumeSpike ? '📊' : '⚡'}Vol
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.priceBelowVWAPStatus === 'green' ? 'text-green-400' : criteriaData.priceBelowVWAPStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title="Prix < VWAP"
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.priceBelowVWAPStatus)}`}></span>
+              P{'<'}VWAP
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.rsiMomentumBearishStatus === 'green' ? 'text-green-400' : criteriaData.rsiMomentumBearishStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`RSI Momentum < -1.5 (${criteriaData.rsiMomentumValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.rsiMomentumBearishStatus)}`}></span>
+              RSI-M↘
+            </span>
+          </>
+        );
+      }
+    }
+
+    // BOLLINGER_BOUNCE Strategy
+    if (criteria.strategyType === 'BOLLINGER_BOUNCE') {
+      if (type === 'long') {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.nearLowerBandStatus === 'green' ? 'text-green-400' : criteriaData.nearLowerBandStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Prix proche bande inf (${criteriaData.distanceValue} au-dessus)`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.nearLowerBandStatus)}`}></span>
+              BB↓ {criteriaData.distanceValue}
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.rsiOversoldStatus === 'green' ? 'text-green-400' : criteriaData.rsiOversoldStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`RSI survente (${criteriaData.rsiValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.rsiOversoldStatus)}`}></span>
+              RSI {criteriaData.rsiValue}
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.volatilityStatus === 'green' ? 'text-green-400' : criteriaData.volatilityStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Volatilité (largeur BB: ${criteriaData.bbWidthValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volatilityStatus)}`}></span>
+              Vol {criteriaData.bbWidthValue}
+            </span>
+          </>
+        );
+      } else {
+        return (
+          <>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.nearUpperBandStatus === 'green' ? 'text-green-400' : criteriaData.nearUpperBandStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Prix proche bande sup (${criteriaData.distanceValue} en-dessous)`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.nearUpperBandStatus)}`}></span>
+              BB↑ {criteriaData.distanceValue}
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.rsiOverboughtStatus === 'green' ? 'text-green-400' : criteriaData.rsiOverboughtStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`RSI surachat (${criteriaData.rsiValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.rsiOverboughtStatus)}`}></span>
+              RSI {criteriaData.rsiValue}
+            </span>
+            <span 
+              className={`flex items-center gap-1 ${criteriaData.volatilityStatus === 'green' ? 'text-green-400' : criteriaData.volatilityStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+              title={`Volatilité (largeur BB: ${criteriaData.bbWidthValue})`}
+            >
+              <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volatilityStatus)}`}></span>
+              Vol {criteriaData.bbWidthValue}
+            </span>
+          </>
+        );
+      }
+    }
+
+    // RSI + EMA criteria
+    if (type === 'long') {
+      return (
+        <>
+          <span 
+            className={`flex items-center gap-1 ${criteriaData.emaTrendStatus === 'green' ? 'text-green-400' : criteriaData.emaTrendStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+            title={`EMA50 (${state?.ema50.toFixed(0)}) > EMA200 (${state?.ema200.toFixed(0)})`}
+          >
+            <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.emaTrendStatus)}`}></span>
+            EMA
+          </span>
+          <span 
+            className={`flex items-center gap-1 ${criteriaData.rsiOversoldStatus === 'green' ? 'text-green-400' : criteriaData.rsiOversoldStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+            title={`RSI: ${state?.rsi.toFixed(1)} < 30 (survente)`}
+          >
+            <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.rsiOversoldStatus)}`}></span>
+            RSI
+          </span>
+        </>
+      );
+    } else {
+      return (
+        <>
+          <span 
+            className={`flex items-center gap-1 ${criteriaData.emaTrendStatus === 'green' ? 'text-green-400' : criteriaData.emaTrendStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+            title={`EMA50 (${state?.ema50.toFixed(0)}) < EMA200 (${state?.ema200.toFixed(0)})`}
+          >
+            <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.emaTrendStatus)}`}></span>
+            EMA
+          </span>
+          <span 
+            className={`flex items-center gap-1 ${criteriaData.rsiOverboughtStatus === 'green' ? 'text-green-400' : criteriaData.rsiOverboughtStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
+            title={`RSI: ${state?.rsi.toFixed(1)} > 70 (surachat)`}
+          >
+            <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.rsiOverboughtStatus)}`}></span>
+            RSI
+          </span>
+        </>
+      );
+    }
+  };
+
+  // Get metrics for selected strategy or global
+  const getSelectedMetrics = () => {
+    if (!state) return null;
+
+    if (selectedStrategy === 'GLOBAL') {
+      // Global metrics: sum of all strategies
+      const totalPnL = strategyPerformances.reduce((sum, p) => sum + p.totalPnL, 0);
+      const totalTrades = strategyPerformances.reduce((sum, p) => sum + p.totalTrades, 0);
+      const totalWinningTrades = strategyPerformances.reduce((sum, p) => sum + p.winningTrades, 0);
+      const winRate = totalTrades > 0 ? (totalWinningTrades / totalTrades) * 100 : 0;
+
+      // For global view, show primary strategy position
+      return {
+        position: state.currentPosition,
+        totalPnL,
+        totalTrades,
+        winningTrades: totalWinningTrades,
+        winRate
+      };
+    } else {
+      // Individual strategy metrics
+      const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+      if (!strategy) return null;
+
+      return {
+        position: strategy.currentPosition,
+        totalPnL: strategy.totalPnL,
+        totalTrades: strategy.totalTrades,
+        winningTrades: strategy.winningTrades,
+        winRate: strategy.winRate
+      };
+    }
+  };
+
+  // Show full page skeleton on initial load
+  if (!state && isConnecting) {
+    return <FullPageSkeleton />;
+  }
+
+  // Get background style based on selected strategy
+  const getBackgroundStyle = () => {
+    if (selectedStrategy === 'GLOBAL') return {};
+    
+    const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+    if (!selectedStrategyData) return {};
+    
+    switch (selectedStrategyData.strategyType) {
+      case 'RSI_EMA': return { backgroundColor: 'rgb(23, 37, 84)' }; // Bleu très foncé
+      case 'MOMENTUM_CROSSOVER': return { backgroundColor: 'rgb(46, 16, 101)' }; // Violet très foncé
+      case 'VOLUME_MACD': return { backgroundColor: 'rgb(67, 20, 7)' }; // Orange très foncé
+      default: return {};
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div className="min-h-screen bg-gray-900 text-white transition-all duration-500" style={getBackgroundStyle()}>
       {/* Header Binance-style */}
-      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
-        <div className="flex items-center justify-between">
+      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 sticky top-0 z-10">
+        <div className="grid grid-cols-3 items-center gap-4">
+          {/* Left: Brand + Pair */}
           <div className="flex items-center gap-4">
             <h1 className="text-xl font-bold text-yellow-400">TradingBot</h1>
             <div className="flex items-center gap-2">
@@ -244,7 +1070,61 @@ export default function Dashboard() {
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          {/* Center: Strategy View Indicator */}
+          <div className="flex justify-center">
+            {strategyPerformances.length > 0 && (
+              <>
+                {selectedStrategy === 'GLOBAL' ? (
+                  <div className="px-4 py-1.5 bg-gray-900 border-2 border-yellow-500/50 rounded">
+                    <span className="text-base font-semibold text-yellow-400">
+                      🌍 Global Dashboard
+                    </span>
+                    <span className="ml-2 text-xs text-gray-400">
+                      {strategyPerformances.length} stratégies
+                    </span>
+                  </div>
+                ) : (() => {
+                  const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+                  if (!selectedStrategyData) return null;
+                  const colors = getStrategyColor(selectedStrategyData.strategyType);
+                  
+                  return (
+                    <div className={`px-4 py-1.5 bg-gray-900 border-2 ${colors.border} rounded flex items-center gap-3`}>
+                      <span className={`text-sm font-semibold ${colors.text}`}>
+                        {selectedStrategy}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-gray-400">P&L:</span>
+                        <span className={`text-xs font-bold ${
+                          selectedStrategyData.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          {selectedStrategyData.totalPnL >= 0 ? '+' : ''}{selectedStrategyData.totalPnL.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-gray-400">Capital:</span>
+                        <span className={`text-xs font-bold ${
+                          selectedStrategyData.currentCapital >= 100000 ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          ${(selectedStrategyData.currentCapital / 1000).toFixed(1)}k
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setSelectedStrategy('GLOBAL')}
+                        className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-[10px] font-medium transition-colors"
+                        title="Retour à la vue globale"
+                      >
+                        ← 
+                      </button>
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+          
+          {/* Right: Monitoring */}
+          <div className="flex items-center justify-end gap-4">
             {isConnecting && (
               <div className="bg-yellow-600 text-white px-4 py-2 rounded text-sm font-medium">
                 ⏳ Connecting...
@@ -252,26 +1132,12 @@ export default function Dashboard() {
             )}
             
             {isConnected && (
-              <>
-                <button
-                  onClick={toggleTradingMode}
-                  className={`px-4 py-2 rounded-md text-sm font-semibold transition-all duration-200 ${
-                    tradingMode
-                      ? 'bg-red-600 hover:bg-red-700 text-white border border-red-500'
-                      : 'bg-green-600 hover:bg-green-700 text-white border border-green-500'
-                  }`}
-                  title={tradingMode ? 'Stop Trading' : 'Start Trading'}
-                >
-                  {tradingMode ? 'STOP' : 'START'}
-                </button>
-                
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${tradingMode ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
-                  <span className={`text-sm font-medium ${tradingMode ? 'text-red-400' : 'text-gray-400'}`}>
-                    {tradingMode ? 'TRADING ACTIVE' : 'MONITORING'}
-                  </span>
-                </div>
-              </>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                <span className="text-sm font-medium text-green-400">
+                  MONITORING
+                </span>
+              </div>
             )}
           </div>
         </div>
@@ -296,13 +1162,41 @@ export default function Dashboard() {
          </div>
        </div>
 
-      {state && (
+      {!state ? (
+        <>
+          {/* OHLC Skeleton */}
+          <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+            <div className="flex items-center gap-8">
+              <div className="animate-pulse">
+                <div className="h-8 w-32 bg-gray-700 rounded"></div>
+              </div>
+              <OHLCSkeleton />
+              <IndicatorSkeleton />
+            </div>
+          </div>
+
+          {/* Trading Info Skeleton */}
+          <TradingInfoSkeleton />
+
+          {/* Criteria Skeleton */}
+          <CriteriaSkeleton />
+
+          {/* Strategy Panel Skeleton */}
+          <StrategyPanelSkeleton />
+
+          {/* Chart Skeleton */}
+          <ChartSkeleton />
+
+          {/* Signal Skeleton */}
+          <SignalSkeleton />
+        </>
+      ) : (
         <>
           {/* OHLC Panel - Binance Style */}
           <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
-            <div className="flex items-center gap-8">
+            <div className="flex items-center justify-between gap-8">
               {/* Current Price */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center  gap-2">
                 <span className="text-2xl font-bold text-white">
                   ${formatPrice(state.currentPrice)}
                 </span>
@@ -375,6 +1269,14 @@ export default function Dashboard() {
 
               {/* Moving Averages */}
               <div className="flex items-center gap-4 text-sm">
+                <div className="flex items-center gap-1" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide">
+                  <span className="text-green-400">MA(12):</span>
+                  <span className="text-green-400 font-mono">${formatIndicator(state.ema12)}</span>
+                </div>
+                <div className="flex items-center gap-1" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen">
+                  <span className="text-orange-400">MA(26):</span>
+                  <span className="text-orange-400 font-mono">${formatIndicator(state.ema26)}</span>
+                </div>
                 <div className="flex items-center gap-1" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme">
                   <span className="text-yellow-400">MA(50):</span>
                   <span className="text-yellow-400 font-mono">${formatIndicator(state.ema50)}</span>
@@ -397,282 +1299,180 @@ export default function Dashboard() {
 
           {/* Trading Info Panel */}
           <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-              {/* Position Info */}
-              <div className="flex flex-col" title="Position actuelle: LONG (achat), SHORT (vente à découvert), ou NONE (aucune position)">
-                <span className="text-gray-400 text-xs mb-1">POSITION</span>
-                <span className={`font-bold ${
-                  state.currentPosition.type === 'LONG' ? 'text-green-400' : 
-                  state.currentPosition.type === 'SHORT' ? 'text-red-400' : 
-                  'text-gray-400'
-                }`}>
-                  {state.currentPosition.type}
-                </span>
-                {state.currentPosition.type !== 'NONE' && (
-                  <span className="text-xs text-gray-500" title={`Prix d'entrée de la position: ${state.currentPosition.entryPrice.toFixed(2)} USDT`}>
-                    Entry: ${state.currentPosition.entryPrice.toFixed(2)}
-                  </span>
-                )}
-              </div>
 
-              {/* PnL */}
-              <div className="flex flex-col" title="Profit/Perte non réalisé(e) de la position actuelle (avant clôture)">
-                <span className="text-gray-400 text-xs mb-1">UNREALIZED P&L</span>
-                <span className={`font-bold ${
-                  state.currentPosition.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                }`}>
-                  {state.currentPosition.unrealizedPnL.toFixed(2)} USDT
-                </span>
-                <span className={`text-xs ${
-                  state.currentPosition.unrealizedPnLPercent >= 0 ? 'text-green-400' : 'text-red-400'
-                }`} title="Pourcentage de profit/perte par rapport au prix d'entrée">
-                  {state.currentPosition.unrealizedPnLPercent.toFixed(2)}%
-                </span>
-              </div>
+            {(() => {
+              const metrics = getSelectedMetrics();
+              if (!metrics) return <TradingInfoSkeleton />;
 
-              {/* Total PnL */}
-              <div className="flex flex-col" title="Profit/Perte total(e) cumulé(e) de toutes les positions fermées">
-                <span className="text-gray-400 text-xs mb-1">TOTAL P&L</span>
-                <span className={`font-bold ${
-                  state.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                }`}>
-                  {state.totalPnL.toFixed(2)} USDT
-                </span>
-                <span className="text-xs text-gray-500" title={`Nombre total de trades exécutés: ${state.totalTrades}`}>
-                  {state.totalTrades} trades
-                </span>
-              </div>
-
-              {/* Win Rate */}
-              <div className="flex flex-col" title="Pourcentage de trades gagnants sur le total des trades">
-                <span className="text-gray-400 text-xs mb-1">WIN RATE</span>
-                <span className="font-bold text-blue-400">
-                  {state.totalTrades > 0 ? ((state.winningTrades / state.totalTrades) * 100).toFixed(1) : 0}%
-                </span>
-                <span className="text-xs text-gray-500" title={`${state.winningTrades} trades gagnants sur ${state.totalTrades} trades au total`}>
-                  {state.winningTrades}/{state.totalTrades} wins
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Trading Criteria Panel - Compact & Collapsible */}
-          <div className="bg-gray-800 border-b border-gray-700 px-4 py-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setShowCriteria(!showCriteria)}
-                  className="text-gray-400 hover:text-white transition-colors"
-                  title="Afficher/Masquer les critères de trading détaillés"
-                >
-                  {showCriteria ? '▼' : '▶'}
-                </button>
-                <span className="text-sm font-medium text-white" title="Critères de validation pour les signaux LONG et SHORT">Trading Criteria</span>
-              </div>
-              
-              {(() => {
-                const criteria = getTradingCriteria();
-                if (!criteria) return null;
-                
-                const longReady = Object.values(criteria.long).every(Boolean);
-                const shortReady = Object.values(criteria.short).every(Boolean);
-                
-                return (
-                  <div className="flex items-center gap-6">
-                    {/* Mini visual indicators - always visible */}
-                    <div className="flex items-center gap-2 text-xs" title="Indicateurs visuels: 🟢 Validé | 🟠 Proche | ⚪ Non validé">
-                      {/* LONG mini indicators */}
-                      <div className="flex items-center gap-1" title="Critères LONG (ordre: EMA, RSI, Position, Cooldown)">
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.emaTrendStatus)}`} title="EMA50 > EMA200 (tendance haussière)"></span>
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.rsiOversoldStatus)}`} title="RSI < 30 (zone de survente)"></span>
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.noPositionStatus)}`} title="Aucune position ouverte"></span>
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.cooldownPassedStatus)}`} title="Cooldown de 5 minutes écoulé"></span>
-                      </div>
-                      <span className="text-gray-500">|</span>
-                      {/* SHORT mini indicators */}
-                      <div className="flex items-center gap-1" title="Critères SHORT (ordre: EMA, RSI, Position, Cooldown)">
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.emaTrendStatus)}`} title="EMA50 < EMA200 (tendance baissière)"></span>
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.rsiOverboughtStatus)}`} title="RSI > 70 (zone de surachat)"></span>
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.noPositionStatus)}`} title="Aucune position ouverte"></span>
-                        <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.cooldownPassedStatus)}`} title="Cooldown de 5 minutes écoulé"></span>
-                      </div>
-                    </div>
-                    
-                    {/* Status summary */}
-                    <div className="flex items-center gap-3 text-xs">
-                      <div 
-                        className={`flex items-center gap-1 ${longReady ? 'text-green-400' : 'text-gray-400'}`}
-                        title={longReady ? 'Signal LONG prêt: Tous les critères sont validés!' : 'Signal LONG en attente: Certains critères ne sont pas encore remplis'}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${longReady ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}></span>
-                        LONG {longReady ? 'READY' : 'WAIT'}
-                      </div>
-                      <div 
-                        className={`flex items-center gap-1 ${shortReady ? 'text-red-400' : 'text-gray-400'}`}
-                        title={shortReady ? 'Signal SHORT prêt: Tous les critères sont validés!' : 'Signal SHORT en attente: Certains critères ne sont pas encore remplis'}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${shortReady ? 'bg-red-400 animate-pulse' : 'bg-gray-600'}`}></span>
-                        SHORT {shortReady ? 'READY' : 'WAIT'}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-            
-            {showCriteria && (() => {
-              const criteria = getTradingCriteria();
-              if (!criteria) return null;
-              
-              const cooldownSeconds = Math.ceil((criteria.cooldownRemaining || 0) / 1000);
-              const cooldownMinutes = Math.floor(cooldownSeconds / 60);
-              const cooldownSecondsRemainder = cooldownSeconds % 60;
-              
               return (
-                <div className="mt-2 space-y-2">
-                  {/* Cooldown Timer - compact version */}
-                  {criteria.cooldownRemaining > 0 && (
-                    <div className="bg-gray-900 px-3 py-1 rounded border border-gray-700">
-                      <div className="flex items-center justify-center gap-2">
-                        <span className="text-xs text-gray-400">⏳ Cooldown:</span>
-                        <span className="text-xs text-yellow-400 font-mono">
-                          {cooldownMinutes}:{cooldownSecondsRemainder.toString().padStart(2, '0')}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Compact inline display */}
-                  <div className="flex items-center justify-between gap-4 text-xs">
-                    {/* LONG Criteria - inline */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-green-400 font-medium" title="Critères pour signal LONG (achat)">🟢 LONG</span>
-                      <div className="flex items-center gap-2">
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.long.emaTrendStatus === 'green' ? 'text-green-400' : criteria.long.emaTrendStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={`EMA50 (${state.ema50.toFixed(0)}) > EMA200 (${state.ema200.toFixed(0)})`}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.emaTrendStatus)}`}></span>
-                          EMA
-                        </span>
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.long.rsiOversoldStatus === 'green' ? 'text-green-400' : criteria.long.rsiOversoldStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={`RSI: ${state.rsi.toFixed(1)} < 30 (survente)`}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.rsiOversoldStatus)}`}></span>
-                          RSI
-                        </span>
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.long.noPositionStatus === 'green' ? 'text-green-400' : criteria.long.noPositionStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={`Position actuelle: ${state.currentPosition.type}`}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.noPositionStatus)}`}></span>
-                          Pos
-                        </span>
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.long.cooldownPassedStatus === 'green' ? 'text-green-400' : criteria.long.cooldownPassedStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={criteria.cooldownRemaining > 0 ? `Cooldown: ${Math.ceil(criteria.cooldownRemaining / 1000)}s restantes` : 'Cooldown OK'}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.long.cooldownPassedStatus)}`}></span>
-                          CD
-                        </span>
-                      </div>
-                    </div>
-                    
-                    {/* Separator */}
-                    <span className="text-gray-600">|</span>
-                    
-                    {/* SHORT Criteria - inline */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-red-400 font-medium" title="Critères pour signal SHORT (vente)">🔴 SHORT</span>
-                      <div className="flex items-center gap-2">
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.short.emaTrendStatus === 'green' ? 'text-green-400' : criteria.short.emaTrendStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={`EMA50 (${state.ema50.toFixed(0)}) < EMA200 (${state.ema200.toFixed(0)})`}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.emaTrendStatus)}`}></span>
-                          EMA
-                        </span>
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.short.rsiOverboughtStatus === 'green' ? 'text-green-400' : criteria.short.rsiOverboughtStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={`RSI: ${state.rsi.toFixed(1)} > 70 (surachat)`}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.rsiOverboughtStatus)}`}></span>
-                          RSI
-                        </span>
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.short.noPositionStatus === 'green' ? 'text-green-400' : criteria.short.noPositionStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={`Position actuelle: ${state.currentPosition.type}`}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.noPositionStatus)}`}></span>
-                          Pos
-                        </span>
-                        <span 
-                          className={`flex items-center gap-1 ${criteria.short.cooldownPassedStatus === 'green' ? 'text-green-400' : criteria.short.cooldownPassedStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-                          title={criteria.cooldownRemaining > 0 ? `Cooldown: ${Math.ceil(criteria.cooldownRemaining / 1000)}s restantes` : 'Cooldown OK'}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${getStatusClass(criteria.short.cooldownPassedStatus)}`}></span>
-                          CD
-                        </span>
-                      </div>
-                    </div>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+                  {/* Position Info */}
+                  <div className="flex flex-col" title="Position actuelle: LONG (achat), SHORT (vente à découvert), ou NONE (aucune position)">
+                    <span className="text-gray-400 text-xs mb-1">POSITION</span>
+                    <span className={`font-bold ${
+                      metrics.position.type === 'LONG' ? 'text-green-400' : 
+                      metrics.position.type === 'SHORT' ? 'text-red-400' : 
+                      'text-gray-400'
+                    }`}>
+                      {metrics.position.type}
+                    </span>
+                    {metrics.position.type !== 'NONE' && (
+                      <span className="text-xs text-gray-500" title={`Prix d'entrée de la position: ${metrics.position.entryPrice.toFixed(2)} USDT`}>
+                        Entry: ${metrics.position.entryPrice.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* PnL */}
+                  <div className="flex flex-col" title="Profit/Perte non réalisé(e) de la position actuelle (avant clôture)">
+                    <span className="text-gray-400 text-xs mb-1">UNREALIZED P&L</span>
+                    <span className={`font-bold ${
+                      metrics.position.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {metrics.position.unrealizedPnL.toFixed(2)} USDT
+                    </span>
+                    <span className={`text-xs ${
+                      metrics.position.unrealizedPnLPercent >= 0 ? 'text-green-400' : 'text-red-400'
+                    }`} title="Pourcentage de profit/perte par rapport au prix d'entrée">
+                      {metrics.position.unrealizedPnLPercent.toFixed(2)}%
+                    </span>
+                  </div>
+
+                  {/* Total PnL */}
+                  <div className="flex flex-col" title="Profit/Perte total(e) cumulé(e) de toutes les positions fermées">
+                    <span className="text-gray-400 text-xs mb-1">TOTAL P&L</span>
+                    <span className={`font-bold ${
+                      metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {metrics.totalPnL.toFixed(2)} USDT
+                    </span>
+                    <span className="text-xs text-gray-500" title={`Nombre total de trades exécutés: ${metrics.totalTrades}`}>
+                      {metrics.totalTrades} trades
+                    </span>
+                  </div>
+
+                  {/* Win Rate */}
+                  <div className="flex flex-col" title="Pourcentage de trades gagnants sur le total des trades">
+                    <span className="text-gray-400 text-xs mb-1">WIN RATE</span>
+                    <span className="font-bold text-blue-400">
+                      {metrics.winRate.toFixed(1)}%
+                    </span>
+                    <span className="text-xs text-gray-500" title={`${metrics.winningTrades} trades gagnants sur ${metrics.totalTrades} trades au total`}>
+                      {metrics.winningTrades}/{metrics.totalTrades} wins
+                    </span>
                   </div>
                 </div>
               );
             })()}
           </div>
 
+          {/* Trading Criteria & Multi-Strategy Performance Panel */}
+          {strategyPerformances.length === 0 ? (
+            <StrategyPanelSkeleton />
+          ) : (
+            <StrategyPanel 
+              performances={strategyPerformances} 
+              onToggleStrategy={handleToggleStrategy}
+              selectedStrategy={selectedStrategy}
+              onSelectStrategy={setSelectedStrategy}
+              getCriteriaForStrategy={getCriteriaForStrategy}
+              getStatusesArray={getStatusesArray}
+              renderCriteriaLabels={renderCriteriaLabels}
+            />
+          )}
+
           {/* Binance-style Chart */}
-          <BinanceChart state={state} />
+          <BinanceChart state={state} selectedStrategy={selectedStrategy} strategyPerformances={strategyPerformances} />
 
           {/* Last Signal - Compact */}
           <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
-            {state.lastSignal ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className={`${getSignalColor(state.lastSignal.type)} px-3 py-1 rounded text-sm font-bold`}>
-                    {state.lastSignal.type}
-                  </span>
-                  <span className="text-white font-mono">${formatPrice(state.lastSignal.price)}</span>
-                  <span className="text-gray-400 text-sm">{formatTime(state.lastSignal.timestamp)}</span>
-                </div>
-                <span className="text-gray-400 text-sm max-w-md truncate">
-                  {state.lastSignal.reason}
-                </span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500 text-sm">Waiting for signal...</span>
-                <div className="w-1 h-1 bg-gray-600 rounded-full animate-pulse"></div>
-              </div>
-            )}
+            {(() => {
+              // Get signals from selected strategy or combined signals
+              let lastSignal = null;
+              let signalHistory: TradingSignal[] = [];
+              
+              if (selectedStrategy === 'GLOBAL') {
+                // Show all signals from all strategies
+                strategyPerformances.forEach(perf => {
+                  signalHistory = [...signalHistory, ...(perf.signalHistory || [])];
+                });
+                signalHistory.sort((a, b) => b.timestamp - a.timestamp);
+                lastSignal = signalHistory[0] || null;
+              } else {
+                // Show signals from selected strategy only
+                const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+                lastSignal = strategy?.lastSignal || null;
+                signalHistory = strategy?.signalHistory || [];
+              }
+              
+              return (
+                <>
+                  {lastSignal ? (
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className={`${getSignalColor(lastSignal.type)} px-3 py-1 rounded text-sm font-bold`}>
+                          {lastSignal.type}
+                        </span>
+                        <span className="text-white font-mono">${formatPrice(lastSignal.price)}</span>
+                        <span className="text-gray-400 text-sm">{formatTime(lastSignal.timestamp)}</span>
+                      </div>
+                      <span className="text-gray-400 text-sm max-w-md truncate">
+                        {lastSignal.reason}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-500 text-sm">Waiting for signal...</span>
+                      <div className="w-1 h-1 bg-gray-600 rounded-full animate-pulse"></div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
           {/* Signals History - Compact */}
-          {state.signals.length > 0 && (
-            <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-300">RECENT SIGNALS</h3>
-                <span className="text-xs text-gray-500">{state.signals.length} total</span>
-              </div>
-              <div className="space-y-2 max-h-40 overflow-y-auto">
-                {[...state.signals].reverse().slice(0, 5).map((signal: TradingSignal, index: number) => (
-                  <div key={index} className="flex items-center justify-between py-1 text-xs">
-                    <div className="flex items-center gap-3">
-                      <span className={`${getSignalColor(signal.type)} px-2 py-1 rounded text-xs font-bold`}>
-                        {signal.type}
+          {(() => {
+            // Get signal history from selected strategy or combined
+            let signalHistory: TradingSignal[] = [];
+            
+            if (selectedStrategy === 'GLOBAL') {
+              strategyPerformances.forEach(perf => {
+                signalHistory = [...signalHistory, ...(perf.signalHistory || [])];
+              });
+              signalHistory.sort((a, b) => b.timestamp - a.timestamp);
+            } else {
+              const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+              signalHistory = strategy?.signalHistory || [];
+            }
+            
+            if (signalHistory.length === 0) return null;
+            
+            return (
+              <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-300">RECENT SIGNALS {selectedStrategy !== 'GLOBAL' && `- ${selectedStrategy}`}</h3>
+                  <span className="text-xs text-gray-500">{signalHistory.length} total</span>
+                </div>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {[...signalHistory].slice(0, 10).map((signal: TradingSignal, index: number) => (
+                    <div key={index} className="flex items-center justify-between py-1 text-xs">
+                      <div className="flex items-center gap-3">
+                        <span className={`${getSignalColor(signal.type)} px-2 py-1 rounded text-xs font-bold`}>
+                          {signal.type}
+                        </span>
+                        <span className="text-white font-mono">${formatPrice(signal.price)}</span>
+                        <span className="text-gray-400">{formatTime(signal.timestamp)}</span>
+                      </div>
+                      <span className="text-gray-500 truncate max-w-xs">
+                        {signal.reason}
                       </span>
-                      <span className="text-white font-mono">${formatPrice(signal.price)}</span>
-                      <span className="text-gray-400">{formatTime(signal.timestamp)}</span>
                     </div>
-                    <span className="text-gray-500 truncate max-w-xs">
-                      {signal.reason}
-                    </span>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </>
       )}
 

@@ -1,11 +1,14 @@
-import { BinanceKlineData, Candle, StrategyState } from '@/types/trading';
+import { BinanceKlineData, Candle, StrategyPerformance, StrategyState } from '@/types/trading';
+import { EMA, RSI } from 'technicalindicators';
 import WebSocket from 'ws';
-import { TradingStrategy, defaultStrategyConfig } from './strategy';
+import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
+import { StrategyManager } from './strategy-manager';
 
 export class BinanceWebSocketManager {
   private ws: WebSocket | null = null;
   private candles: Candle[] = [];
   private strategy: TradingStrategy;
+  private strategyManager: StrategyManager;
   private state: StrategyState;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
@@ -19,11 +22,14 @@ export class BinanceWebSocketManager {
     this.timeframe = timeframe;
     this.tradingMode = tradingMode;
     this.strategy = new TradingStrategy(defaultStrategyConfig);
+    this.strategyManager = new StrategyManager();
     this.onStateUpdate = onStateUpdate;
     this.state = {
       candles: [],
       currentPrice: 0,
       rsi: 0,
+      ema12: 0,
+      ema26: 0,
       ema50: 0,
       ema200: 0,
       // Binance-style moving averages
@@ -159,7 +165,7 @@ export class BinanceWebSocketManager {
         if (kline.x) {
           // Candle is closed, add to our collection
           const newCandle: Candle = {
-            time: kline.t,
+            time: kline.T, // Use close time instead of start time for accurate display
             open: parseFloat(kline.o),
             high: parseFloat(kline.h),
             low: parseFloat(kline.l),
@@ -167,13 +173,20 @@ export class BinanceWebSocketManager {
             volume: parseFloat(kline.v)
           };
 
-          // Add new candle and keep last 200
-          this.candles.push(newCandle);
-          if (this.candles.length > 300) {
-            this.candles.shift();
+          // Check if this candle already exists to avoid duplicates
+          const lastCandle = this.candles[this.candles.length - 1];
+          if (lastCandle && lastCandle.time === newCandle.time) {
+            // This is a duplicate, just update the last candle
+            this.candles[this.candles.length - 1] = newCandle;
+            console.log(`📈 Updated candle: ${newCandle.close.toFixed(2)} USDT`);
+          } else {
+            // This is a new candle
+            this.candles.push(newCandle);
+            if (this.candles.length > 300) {
+              this.candles.shift();
+            }
+            console.log(`📈 New candle closed: ${newCandle.close.toFixed(2)} USDT`);
           }
-
-          console.log(`📈 New candle closed: ${newCandle.close.toFixed(2)} USDT`);
           
           // Analyze market and check for signals
           this.analyzeAndExecute();
@@ -205,10 +218,19 @@ export class BinanceWebSocketManager {
    * Analyze market and execute trades if signal detected
    */
   private analyzeAndExecute(): void {
-    // Calculer les indicateurs pour l'affichage
-    const signal = this.strategy.analyzeMarket(this.candles);
+    // Always analyze with strategy manager for multi-strategy support
+    this.strategyManager.analyzeAllStrategies(this.candles);
     
-    if (signal) {
+    // Get the best performing strategy for display
+    const performances = this.strategyManager.getAllPerformances();
+    const bestStrategyData = this.strategyManager.getBestStrategy();
+    const bestStrategy = bestStrategyData ? bestStrategyData.performance : null;
+    
+    // Always calculate and update indicators from the first active strategy
+    const activeStrategy = performances.find(p => p.isActive);
+    if (activeStrategy && activeStrategy.lastSignal) {
+      const signal = activeStrategy.lastSignal;
+      
       // Update state with new signal
       if (signal.type !== 'HOLD') {
         this.state.signals.push(signal);
@@ -218,11 +240,6 @@ export class BinanceWebSocketManager {
         }
         // Mettre à jour lastSignal seulement pour les signaux actionnables
         this.state.lastSignal = signal;
-        
-        // Execute trade seulement si le mode trading est activé
-        if (this.tradingMode) {
-          this.strategy.executeTrade(signal);
-        }
       }
       
       // Toujours mettre à jour les indicateurs
@@ -234,16 +251,108 @@ export class BinanceWebSocketManager {
       this.state.ma99 = signal.ma99;
       this.state.currentPrice = signal.price;
       
-      // Update position information
-      const positionInfo = this.strategy.getPositionInfo();
-      this.state.currentPosition = positionInfo.position;
-      this.state.totalPnL = positionInfo.totalPnL;
-      this.state.totalTrades = positionInfo.totalTrades;
-      this.state.winningTrades = positionInfo.winningTrades;
+      // Update position information from best strategy
+      this.state.currentPosition = bestStrategy ? bestStrategy.currentPosition : this.state.currentPosition;
+      this.state.totalPnL = bestStrategy ? bestStrategy.totalPnL : this.state.totalPnL;
+      this.state.totalTrades = bestStrategy ? bestStrategy.totalTrades : this.state.totalTrades;
+      this.state.winningTrades = bestStrategy ? bestStrategy.winningTrades : this.state.winningTrades;
       
       // Update state with full chart data
       this.updateState();
+    } else {
+      // Always calculate indicators directly when no strategy signal
+      this.calculateAndUpdateIndicators();
     }
+  }
+
+  /**
+   * Calculate indicators directly when no strategy signal is available
+   */
+  private calculateAndUpdateIndicators(): void {
+    if (this.candles.length < 200) {
+      return; // Need enough data for indicators
+    }
+    
+    const currentPrice = this.candles[this.candles.length - 1].close;
+    
+    // Calculate RSI
+    const rsi = this.calculateRSI(this.candles);
+    if (rsi !== null) this.state.rsi = rsi;
+    
+    // Calculate EMAs (current)
+    const ema12 = this.calculateEMA(this.candles, 12);
+    if (ema12 !== null) this.state.ema12 = ema12;
+    
+    const ema26 = this.calculateEMA(this.candles, 26);
+    if (ema26 !== null) this.state.ema26 = ema26;
+    
+    const ema50 = this.calculateEMA(this.candles, 50);
+    if (ema50 !== null) this.state.ema50 = ema50;
+    
+    const ema200 = this.calculateEMA(this.candles, 200);
+    if (ema200 !== null) this.state.ema200 = ema200;
+    
+    // Calculate SMAs
+    const ma7 = this.calculateSMA(this.candles, 7);
+    if (ma7 !== null) this.state.ma7 = ma7;
+    
+    const ma25 = this.calculateSMA(this.candles, 25);
+    if (ma25 !== null) this.state.ma25 = ma25;
+    
+    const ma99 = this.calculateSMA(this.candles, 99);
+    if (ma99 !== null) this.state.ma99 = ma99;
+    
+    this.state.currentPrice = currentPrice;
+    this.updateState();
+  }
+
+  /**
+   * Calculate RSI from candle data
+   */
+  private calculateRSI(candles: Candle[]): number | null {
+    if (candles.length < 14) {
+      return null;
+    }
+
+    const closePrices = candles.map(c => c.close);
+    const rsiValues = RSI.calculate({
+      values: closePrices,
+      period: 14
+    });
+
+    return rsiValues.length > 0 ? rsiValues[rsiValues.length - 1] : null;
+  }
+
+  /**
+   * Calculate EMA from candle data
+   */
+  private calculateEMA(candles: Candle[], period: number): number | null {
+    if (candles.length < period) {
+      return null;
+    }
+
+    const closePrices = candles.map(c => c.close);
+    const emaValues = EMA.calculate({
+      values: closePrices,
+      period: period
+    });
+
+    return emaValues.length > 0 ? emaValues[emaValues.length - 1] : null;
+  }
+
+  /**
+   * Calculate Simple Moving Average (SMA) like Binance
+   */
+  private calculateSMA(candles: Candle[], period: number): number | null {
+    if (candles.length < period) {
+      return null;
+    }
+
+    const closePrices = candles.map(c => c.close);
+    const recentPrices = closePrices.slice(-period);
+    const sum = recentPrices.reduce((acc, price) => acc + price, 0);
+    
+    return sum / period;
   }
 
   /**
@@ -264,6 +373,10 @@ export class BinanceWebSocketManager {
     
     this.state.candles = this.candles.slice(-candlesToKeep);
     this.state.lastUpdate = Date.now();
+    
+    // Add strategy performances to state
+    this.state.strategyPerformances = this.strategyManager.getAllPerformances();
+    
     this.notifyStateUpdate();
   }
 
@@ -340,6 +453,35 @@ export class BinanceWebSocketManager {
       console.error('❌ Error changing timeframe:', error);
       throw error;
     }
+  }
+
+  /**
+   * Set trading mode without reconnecting
+   */
+  setTradingMode(enabled: boolean): void {
+    this.tradingMode = enabled;
+    console.log(`🔄 Trading mode set to: ${enabled ? 'ACTIVE' : 'MONITORING'}`);
+  }
+
+  /**
+   * Get all strategy performances
+   */
+  getStrategyPerformances(): StrategyPerformance[] {
+    return this.strategyManager.getAllPerformances();
+  }
+
+  /**
+   * Toggle a specific strategy
+   */
+  toggleStrategy(strategyName: string): boolean {
+    return this.strategyManager.toggleStrategy(strategyName);
+  }
+
+  /**
+   * Reset a specific strategy
+   */
+  async resetStrategy(strategyName: string): Promise<boolean> {
+    return await this.strategyManager.resetStrategy(strategyName);
   }
 
   /**

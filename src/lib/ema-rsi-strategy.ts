@@ -15,6 +15,9 @@ export class TradingStrategy {
   private totalPnL: number = 0;
   private totalTrades: number = 0;
   private winningTrades: number = 0;
+  private signalHistory: TradingSignal[] = [];
+  private lastSignal: TradingSignal | null = null;
+  private initialCapital: number = 100000; // 100,000 USDT
 
   constructor(config: StrategyConfig) {
     this.config = config;
@@ -176,6 +179,7 @@ export class TradingStrategy {
     this.lastTradeTime = Date.now();
 
     const signalType = closedPosition.type === 'LONG' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
+    const currentCapital = this.initialCapital + this.totalPnL;
     
     return {
       type: signalType,
@@ -185,13 +189,19 @@ export class TradingStrategy {
       ema50: 0, // Will be calculated by caller
       ema200: 0, // Will be calculated by caller
       ma7: 0, // Will be calculated by caller
+      ema12: 0, // Will be calculated by caller
+      ema26: 0, // Will be calculated by caller
       ma25: 0, // Will be calculated by caller
       ma99: 0, // Will be calculated by caller
       reason: `${reason} | Net PnL: ${netPnL.toFixed(2)} USDT (${netPnLPercent.toFixed(2)}%) | Fees: ${fees.toFixed(2)} USDT`,
       position: {
         ...closedPosition,
         unrealizedPnL: netPnL,
-        unrealizedPnLPercent: netPnLPercent
+        unrealizedPnLPercent: netPnLPercent,
+        totalPnL: this.totalPnL,
+        totalPnLPercent: (this.totalPnL / this.initialCapital) * 100,
+        fees: fees,
+        currentCapital: currentCapital
       }
     };
   }
@@ -199,16 +209,37 @@ export class TradingStrategy {
   /**
    * Get current position and statistics
    */
-  getPositionInfo(): { position: Position; totalPnL: number; totalTrades: number; winningTrades: number; winRate: number } {
+  getPositionInfo(): { position: Position; totalPnL: number; totalTrades: number; winningTrades: number; winRate: number; lastSignal: TradingSignal | null; signalHistory: TradingSignal[]; currentCapital: number; isBullishCrossover?: boolean; isBearishCrossover?: boolean } {
     const winRate = this.totalTrades > 0 ? (this.winningTrades / this.totalTrades) * 100 : 0;
+    const currentCapital = this.initialCapital + this.totalPnL + this.currentPosition.unrealizedPnL;
     
     return {
       position: { ...this.currentPosition },
       totalPnL: this.totalPnL,
       totalTrades: this.totalTrades,
       winningTrades: this.winningTrades,
-      winRate
+      winRate,
+      lastSignal: this.lastSignal,
+      signalHistory: [...this.signalHistory],
+      currentCapital,
+      // RSI+EMA strategy doesn't use crossovers
+      isBullishCrossover: undefined,
+      isBearishCrossover: undefined
     };
+  }
+
+  /**
+   * Record a signal in history (only for actionable signals)
+   */
+  private recordSignal(signal: TradingSignal): void {
+    if (signal.type !== 'HOLD') {
+      this.lastSignal = signal;
+      this.signalHistory.push(signal);
+      // Keep only last 50 signals
+      if (this.signalHistory.length > 50) {
+        this.signalHistory.shift();
+      }
+    }
   }
 
   /**
@@ -221,6 +252,8 @@ export class TradingStrategy {
     }
 
     const rsi = this.calculateRSI(candles);
+    const ema12 = this.calculateEMA(candles, 12);
+    const ema26 = this.calculateEMA(candles, 26);
     const ema50 = this.calculateEMA(candles, this.config.ema50Period);
     const ema200 = this.calculateEMA(candles, this.config.ema200Period);
     
@@ -229,7 +262,7 @@ export class TradingStrategy {
     const ma25 = this.calculateSMA(candles, 25);
     const ma99 = this.calculateSMA(candles, 99);
 
-    if (rsi === null || ema50 === null || ema200 === null || ma7 === null || ma25 === null || ma99 === null) {
+    if (rsi === null || ema12 === null || ema26 === null || ema50 === null || ema200 === null || ma7 === null || ma25 === null || ma99 === null) {
       console.log('Unable to calculate indicators');
       return null;
     }
@@ -241,18 +274,22 @@ export class TradingStrategy {
     if (this.currentPosition.type !== 'NONE') {
       const exitCheck = this.shouldClosePosition(currentPrice);
       if (exitCheck.shouldClose) {
-        return this.closePosition(currentPrice, exitCheck.reason);
+        const closeSignal = this.closePosition(currentPrice, exitCheck.reason);
+        this.recordSignal(closeSignal);
+        return closeSignal;
       }
 
       // Check for reverse signal (close and open opposite)
       if (this.currentPosition.type === 'LONG' && ema50 < ema200 && rsi > this.config.rsiSellThreshold) {
         const closeSignal = this.closePosition(currentPrice, 'Reverse signal detected');
+        this.recordSignal(closeSignal);
         // Will open SHORT position in next call (after cooldown)
         return closeSignal;
       }
       
       if (this.currentPosition.type === 'SHORT' && ema50 > ema200 && rsi < this.config.rsiBuyThreshold) {
         const closeSignal = this.closePosition(currentPrice, 'Reverse signal detected');
+        this.recordSignal(closeSignal);
         // Will open LONG position in next call (after cooldown)
         return closeSignal;
       }
@@ -268,6 +305,8 @@ export class TradingStrategy {
         ema200,
         ma7,
         ma25,
+        ema12,
+        ema26,
         ma99,
         reason: `In ${this.currentPosition.type} position | PnL: ${this.currentPosition.unrealizedPnLPercent.toFixed(2)}%`,
         position: { ...this.currentPosition }
@@ -282,6 +321,8 @@ export class TradingStrategy {
         timestamp,
         price: currentPrice,
         rsi,
+        ema12,
+        ema26,
         ema50,
         ema200,
         ma7,
@@ -303,19 +344,27 @@ export class TradingStrategy {
       };
       
       this.lastTradeTime = timestamp;
-      return {
+      const currentCapital = this.initialCapital + this.totalPnL;
+      const buySignal: TradingSignal = {
         type: 'BUY',
         timestamp,
         price: currentPrice,
         rsi,
+        ema12,
+        ema26,
         ema50,
         ema200,
         ma7,
         ma25,
         ma99,
         reason: `RSI oversold (${rsi.toFixed(2)}) and uptrend (EMA50 > EMA200) - Opening LONG`,
-        position: { ...this.currentPosition }
+        position: { 
+          ...this.currentPosition,
+          currentCapital: currentCapital
+        }
       };
+      this.recordSignal(buySignal);
+      return buySignal;
     }
 
     // SELL Signal (Open SHORT): EMA50 < EMA200 AND RSI > 70
@@ -330,19 +379,27 @@ export class TradingStrategy {
       };
       
       this.lastTradeTime = timestamp;
-      return {
+      const currentCapital = this.initialCapital + this.totalPnL;
+      const sellSignal: TradingSignal = {
         type: 'SELL',
         timestamp,
         price: currentPrice,
         rsi,
+        ema12,
+        ema26,
         ema50,
         ema200,
         ma7,
         ma25,
         ma99,
         reason: `RSI overbought (${rsi.toFixed(2)}) and downtrend (EMA50 < EMA200) - Opening SHORT`,
-        position: { ...this.currentPosition }
+        position: { 
+          ...this.currentPosition,
+          currentCapital: currentCapital
+        }
       };
+      this.recordSignal(sellSignal);
+      return sellSignal;
     }
 
     // HOLD - No signal
@@ -351,6 +408,8 @@ export class TradingStrategy {
       timestamp,
       price: currentPrice,
       rsi,
+      ema12,
+      ema26,
       ema50,
       ema200,
       ma7,
@@ -393,6 +452,92 @@ export class TradingStrategy {
       console.log(`🚨 [LIVE] ${signal.type} signal - Real trading not yet implemented`);
     }
   }
+
+  /**
+   * Restore strategy state from database trades
+   */
+  restoreFromDatabase(trades: any[]): void {
+    if (trades.length === 0) return;
+
+    console.log(`📥 Restoring RSI+EMA strategy from ${trades.length} trades...`);
+
+    // Count closed trades
+    const closeTrades = trades.filter((t: any) => 
+      t.signal_type === 'CLOSE_LONG' || t.signal_type === 'CLOSE_SHORT'
+    );
+
+    this.totalTrades = closeTrades.length;
+    
+    // Get the most recent total_pnl (it's already cumulative)
+    const mostRecentTrade = trades[0];
+    this.totalPnL = mostRecentTrade && mostRecentTrade.total_pnl ? parseFloat(mostRecentTrade.total_pnl) : 0;
+    
+    // Count wins from individual trades (use pnl field, not total_pnl)
+    this.winningTrades = closeTrades.filter((t: any) => {
+      const tradePnl = parseFloat(t.pnl) || 0;
+      return tradePnl > 0;
+    }).length;
+
+    // Get the most recent trade to check if there's an open position
+    const latestTrade = trades[0]; // trades are ordered by timestamp DESC
+    if (latestTrade && (latestTrade.signal_type === 'BUY' || latestTrade.signal_type === 'SELL')) {
+      // There might be an open position
+      const hasClosingTrade = trades.some((t: any) => 
+        (t.signal_type === 'CLOSE_LONG' || t.signal_type === 'CLOSE_SHORT') &&
+        new Date(t.timestamp) > new Date(latestTrade.timestamp)
+      );
+
+      if (!hasClosingTrade && latestTrade.position_type !== 'NONE') {
+        // Restore open position
+        this.currentPosition = {
+          type: latestTrade.position_type,
+          entryPrice: parseFloat(latestTrade.entry_price),
+          entryTime: new Date(latestTrade.entry_time).getTime(),
+          quantity: parseFloat(latestTrade.quantity),
+          unrealizedPnL: parseFloat(latestTrade.unrealized_pnl) || 0,
+          unrealizedPnLPercent: parseFloat(latestTrade.unrealized_pnl_percent) || 0
+        };
+        console.log(`   Restored open ${this.currentPosition.type} position @ ${this.currentPosition.entryPrice.toFixed(2)}`);
+      }
+    }
+
+    // Restore signal history (last 50 signals)
+    this.signalHistory = trades
+      .filter((t: any) => t.signal_type !== 'HOLD')
+      .slice(0, 50)
+      .map((t: any) => ({
+        type: t.signal_type,
+        timestamp: new Date(t.timestamp).getTime(),
+        price: parseFloat(t.price),
+        rsi: 0,
+        ema12: 0,
+        ema26: 0,
+        ema50: 0,
+        ema200: 0,
+        ma7: 0,
+        ma25: 0,
+        ma99: 0,
+        reason: t.reason || '',
+        position: t.position_type !== 'NONE' ? {
+          type: t.position_type,
+          entryPrice: parseFloat(t.entry_price),
+          entryTime: new Date(t.entry_time).getTime(),
+          quantity: parseFloat(t.quantity),
+          unrealizedPnL: parseFloat(t.unrealized_pnl) || 0,
+          unrealizedPnLPercent: parseFloat(t.unrealized_pnl_percent) || 0,
+          totalPnL: parseFloat(t.total_pnl) || 0,
+          totalPnLPercent: parseFloat(t.total_pnl_percent) || 0,
+          fees: parseFloat(t.fees) || 0,
+          currentCapital: parseFloat(t.current_capital) || 100000
+        } : undefined
+      }));
+
+    if (this.signalHistory.length > 0) {
+      this.lastSignal = this.signalHistory[0];
+    }
+
+    console.log(`   ✅ Restored: ${this.totalTrades} trades, ${this.winningTrades} wins, ${this.totalPnL.toFixed(2)} USDT total PnL, ${this.signalHistory.length} signals in history`);
+  }
 }
 
 export const defaultStrategyConfig: StrategyConfig = {
@@ -403,9 +548,10 @@ export const defaultStrategyConfig: StrategyConfig = {
   rsiSellThreshold: 70,
   cooldownPeriod: 5 * 60 * 1000, // 5 minutes
   simulationMode: true,
+  // Position management (adjusted for Binance fees)
   profitTargetPercent: 2.5, // Take profit at 2.5% (2% profit + 0.2% fees + 0.3% buffer)
   stopLossPercent: 1.5, // Stop loss at 1.5% (1% loss + 0.2% fees + 0.3% buffer)
   maxPositionTime: 60 * 60 * 1000, // Max 1 hour in position
-  positionSize: 0.0001 // Trade 0.0001 BTC (~11.3 USDT per trade) - 1.13% of 1000€ capital
+  positionSize: 0.01 // Trade 0.01 BTC (~1,100 USDT per trade) - 1.1% of 100,000$ capital
 };
 

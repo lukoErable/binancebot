@@ -14,6 +14,10 @@ export interface Position {
   quantity: number;
   unrealizedPnL: number;
   unrealizedPnLPercent: number;
+  totalPnL?: number;
+  totalPnLPercent?: number;
+  fees?: number;
+  currentCapital?: number;
 }
 
 export interface TradingSignal {
@@ -21,6 +25,8 @@ export interface TradingSignal {
   timestamp: number;
   price: number;
   rsi: number;
+  ema12: number;
+  ema26: number;
   ema50: number;
   ema200: number;
   // Binance-style moving averages
@@ -35,6 +41,8 @@ export interface StrategyState {
   candles: Candle[];
   currentPrice: number;
   rsi: number;
+  ema12: number;
+  ema26: number;
   ema50: number;
   ema200: number;
   // Binance-style moving averages
@@ -50,6 +58,7 @@ export interface StrategyState {
   totalTrades: number;
   winningTrades: number;
   timeframe: string;
+  strategyPerformances?: StrategyPerformance[];
 }
 
 export interface BinanceKlineData {
@@ -90,5 +99,36 @@ export interface StrategyConfig {
   stopLossPercent: number; // % loss to stop
   maxPositionTime: number; // max time in position (ms)
   positionSize: number; // quantity to trade
+  // Momentum Crossover strategy parameters
+  emaFastPeriod?: number; // Fast EMA for crossover (default: 12)
+  emaSlowPeriod?: number; // Slow EMA for crossover (default: 26)
+}
+
+export interface StrategyPerformance {
+  strategyName: string;
+  strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE';
+  totalPnL: number;
+  totalTrades: number;
+  winningTrades: number;
+  winRate: number;
+  currentPosition: Position;
+  lastSignal: TradingSignal | null;
+  signalHistory: TradingSignal[];
+  isActive: boolean;
+  currentCapital: number; // Capital actuel (initial + P&L)
+  // Strategy-specific flags
+  isBullishCrossover?: boolean; // Momentum Crossover
+  isBearishCrossover?: boolean; // Momentum Crossover
+  isVolumeBreakout?: boolean; // Volume MACD
+  isMACDBullish?: boolean; // Volume MACD
+  isMACDBearish?: boolean; // Volume MACD
+  isPriceAccelerating?: boolean; // Neural Scalper
+  isVolatilityHigh?: boolean; // Neural Scalper
+  isMomentumStrong?: boolean; // Neural Scalper
+  // Neural Scalper detailed values
+  velocity?: number; // Vélocité du prix
+  acceleration?: number; // Accélération du prix
+  rsiMomentum?: number; // Momentum RSI
+  volumeSpike?: boolean; // Pic de volume
 }
 

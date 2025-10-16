@@ -5,7 +5,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "TradingBot BTC/USDT - RSI + EMA",
+  title: "TradingBot BTC/USDT",
   description: "Bot de trading automatique en temps réel avec stratégie RSI + EMA",
 };
 
