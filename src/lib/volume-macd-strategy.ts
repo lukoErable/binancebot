@@ -480,6 +480,15 @@ export class VolumeMACDStrategy {
   }
 
   /**
+   * Update position PnL with current market price (for real-time updates)
+   */
+  updatePositionWithCurrentPrice(currentPrice: number): void {
+    if (this.currentPosition.type !== 'NONE') {
+      this.updatePositionPnL(currentPrice);
+    }
+  }
+
+  /**
    * Calculate trading fees (Binance: 0.1% maker + 0.1% taker)
    */
   private calculateFees(entryPrice: number, exitPrice: number, quantity: number): number {

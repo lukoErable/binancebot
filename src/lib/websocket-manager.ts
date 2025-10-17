@@ -4,6 +4,13 @@ import WebSocket from 'ws';
 import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
 import { StrategyManager } from './strategy-manager';
 
+// Global strategyManager instance for access from API routes
+let globalStrategyManager: StrategyManager | null = null;
+
+export function getGlobalStrategyManager(): StrategyManager | null {
+  return globalStrategyManager;
+}
+
 export class BinanceWebSocketManager {
   private ws: WebSocket | null = null;
   private candles: Candle[] = [];
@@ -17,12 +24,14 @@ export class BinanceWebSocketManager {
   private isInitialized = false;
   private timeframe: string = '1m';
   private tradingMode: boolean = false;
+  private isAnalyzing = false; // Flag pour éviter les analyses parallèles
 
   constructor(onStateUpdate?: (state: StrategyState) => void, timeframe: string = '1m', tradingMode: boolean = false) {
     this.timeframe = timeframe;
     this.tradingMode = tradingMode;
     this.strategy = new TradingStrategy(defaultStrategyConfig);
     this.strategyManager = new StrategyManager();
+    globalStrategyManager = this.strategyManager; // Expose globally
     this.onStateUpdate = onStateUpdate;
     this.state = {
       candles: [],
@@ -128,6 +137,12 @@ export class BinanceWebSocketManager {
         console.log('✅ Connected to Binance WebSocket');
         this.reconnectAttempts = 0;
         this.state.isConnected = true;
+        
+        // Update P&L for any restored positions with current price
+        if (this.state.currentPrice > 0) {
+          this.strategyManager.updateAllStrategiesWithCurrentPrice(this.state.currentPrice);
+        }
+        
         this.updateState();
       });
 
@@ -161,9 +176,9 @@ export class BinanceWebSocketManager {
       if (message.e === 'kline') {
         const kline = message.k;
         
-        // Only process closed candles
+        // Process both closed and in-progress candles for real-time trading
         if (kline.x) {
-          // Candle is closed, add to our collection
+          // Candle is CLOSED, finalize and add to our collection
           const newCandle: Candle = {
             time: kline.T, // Use close time instead of start time for accurate display
             open: parseFloat(kline.o),
@@ -193,22 +208,29 @@ export class BinanceWebSocketManager {
             console.error('❌ Error in analyzeAndExecute:', error);
           });
         } else {
-          // Update current price in real-time for smooth display
+          // Candle is IN-PROGRESS (not closed yet) - update in real-time
           this.state.currentPrice = parseFloat(kline.c);
           this.state.lastUpdate = Date.now();
           
-          // Update the last candle with current price for real-time display
+          // Update the last candle with current price for LIVE trading
           if (this.candles.length > 0) {
             this.candles[this.candles.length - 1] = {
               ...this.candles[this.candles.length - 1],
               close: parseFloat(kline.c),
-              high: Math.max(this.candles[this.candles.length - 1].high, parseFloat(kline.c)),
-              low: Math.min(this.candles[this.candles.length - 1].low, parseFloat(kline.c))
+              high: Math.max(this.candles[this.candles.length - 1].high, parseFloat(kline.h)),
+              low: Math.min(this.candles[this.candles.length - 1].low, parseFloat(kline.l)),
+              volume: parseFloat(kline.v)
             };
           }
           
-          // Update state smoothly without full re-analysis
-          this.updateState();
+          // Update all strategies with current price for real-time P&L calculation
+          this.strategyManager.updateAllStrategiesWithCurrentPrice(parseFloat(kline.c));
+          
+          // REAL-TIME ANALYSIS: Analyze market on EVERY price update (not just closed candles)
+          // This is critical for scalping strategies like Neural Scalper
+          this.analyzeAndExecute().catch(error => {
+            console.error('❌ Error in real-time analyzeAndExecute:', error);
+          });
         }
       }
     } catch (error) {
@@ -220,8 +242,19 @@ export class BinanceWebSocketManager {
    * Analyze market and execute trades if signal detected
    */
   private async analyzeAndExecute(): Promise<void> {
-    // Always analyze with strategy manager for multi-strategy support
-    await this.strategyManager.analyzeAllStrategies(this.candles);
+    // Éviter les exécutions parallèles (évite les duplicates lors du rechargement)
+    if (this.isAnalyzing) {
+      console.log('⏭️  Analysis already in progress, skipping...');
+      return;
+    }
+    
+    this.isAnalyzing = true;
+    try {
+      // Always analyze with strategy manager for multi-strategy support
+      await this.strategyManager.analyzeAllStrategies(this.candles);
+    } finally {
+      this.isAnalyzing = false;
+    }
     
     // Get the best performing strategy for display
     const performances = this.strategyManager.getAllPerformances();

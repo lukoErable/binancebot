@@ -1,5 +1,6 @@
 import { Candle, CompletedTrade, Position, TradingSignal } from '@/types/trading';
 import CompletedTradeRepository from './db/completed-trade-repository';
+import OpenPositionRepository from './db/open-position-repository';
 
 /**
  * Simple Trend Follower Strategy
@@ -8,17 +9,21 @@ import CompletedTradeRepository from './db/completed-trade-repository';
  */
 
 export interface TrendFollowerConfig {
-  profitTarget: number;      // 2% profit target
-  stopLoss: number;          // 2% stop loss
-  trendPeriod: number;       // Période pour détecter la tendance (EMA)
+  profitTargetPercent: number;      // 2% profit target
+  stopLossPercent: number;          // 2% stop loss
+  maxPositionTime: number;          // Max position time in milliseconds
+  trendPeriod: number;              // Période pour détecter la tendance (EMA)
+  trendConfirmationCandles: number; // Number of candles to confirm trend
   simulationMode: boolean;
   positionSize: number;
 }
 
 export const trendFollowerConfig: TrendFollowerConfig = {
-  profitTarget: 2.0,          // 2%
-  stopLoss: 2.0,              // 2%
-  trendPeriod: 50,            // EMA 50 pour la tendance
+  profitTargetPercent: 2.0,          // 2%
+  stopLossPercent: 2.0,              // 2%
+  maxPositionTime: 240 * 60 * 1000,  // 240 minutes
+  trendPeriod: 50,                   // EMA 50 pour la tendance
+  trendConfirmationCandles: 3,       // Confirmation sur 3 bougies consécutives
   simulationMode: true,
   positionSize: 0.001
 };
@@ -37,9 +42,13 @@ export class TrendFollowerStrategy {
   
   // Track entry information for creating CompletedTrade
   private entrySignal: TradingSignal | null = null;
+  
+  // Strategy name for database operations
+  private strategyName: string = '';
 
-  constructor(config: TrendFollowerConfig) {
+  constructor(config: TrendFollowerConfig, strategyName: string = 'Trend Follower') {
     this.config = config;
+    this.strategyName = strategyName;
     this.currentPosition = {
       type: 'NONE',
       entryPrice: 0,
@@ -67,19 +76,88 @@ export class TrendFollowerStrategy {
   }
 
   /**
-   * Detect trend direction
+   * Detect trend direction with confirmation
    */
-  private detectTrend(candles: Candle[]): 'UP' | 'DOWN' {
-    if (candles.length < this.config.trendPeriod) {
-      return 'UP'; // Default
+  private detectTrend(candles: Candle[]): 'UP' | 'DOWN' | 'NONE' {
+    if (candles.length < this.config.trendPeriod + this.config.trendConfirmationCandles) {
+      return 'NONE'; // Pas assez de données
+    }
+
+    const ema = this.calculateEMA(candles, this.config.trendPeriod);
+    
+    // Vérifier les N dernières bougies pour confirmation
+    const recentCandles = candles.slice(-this.config.trendConfirmationCandles);
+    
+    // Compter combien de bougies sont au-dessus/en-dessous de l'EMA
+    let candlesAboveEMA = 0;
+    let candlesBelowEMA = 0;
+    
+    recentCandles.forEach(candle => {
+      if (candle.close > ema) {
+        candlesAboveEMA++;
+      } else {
+        candlesBelowEMA++;
+      }
+    });
+
+    // Confirmation de tendance haussière : toutes les bougies au-dessus de l'EMA
+    if (candlesAboveEMA === this.config.trendConfirmationCandles) {
+      return 'UP';
+    }
+    
+    // Confirmation de tendance baissière : toutes les bougies en-dessous de l'EMA
+    if (candlesBelowEMA === this.config.trendConfirmationCandles) {
+      return 'DOWN';
+    }
+
+    // Pas de confirmation claire
+    return 'NONE';
+  }
+
+  /**
+   * Get trend strength (for display purposes)
+   */
+  getTrendInfo(candles: Candle[]): {
+    trend: 'UP' | 'DOWN' | 'NONE';
+    strength: 'STRONG' | 'WEAK' | 'NONE';
+    ema50: number;
+    currentPrice: number;
+    candlesInTrend: number;
+  } {
+    if (candles.length < this.config.trendPeriod + this.config.trendConfirmationCandles) {
+      return {
+        trend: 'NONE',
+        strength: 'NONE',
+        ema50: 0,
+        currentPrice: 0,
+        candlesInTrend: 0
+      };
     }
 
     const ema = this.calculateEMA(candles, this.config.trendPeriod);
     const currentPrice = candles[candles.length - 1].close;
+    const trend = this.detectTrend(candles);
+    
+    // Calculer le nombre de bougies consécutives dans la tendance
+    const recentCandles = candles.slice(-this.config.trendConfirmationCandles);
+    let candlesInTrend = 0;
+    
+    if (trend === 'UP') {
+      candlesInTrend = recentCandles.filter(c => c.close > ema).length;
+    } else if (trend === 'DOWN') {
+      candlesInTrend = recentCandles.filter(c => c.close < ema).length;
+    }
 
-    // Tendance haussière si prix > EMA
-    // Tendance baissière si prix < EMA
-    return currentPrice > ema ? 'UP' : 'DOWN';
+    // Déterminer la force de la tendance
+    const strength = candlesInTrend === this.config.trendConfirmationCandles ? 'STRONG' : 'WEAK';
+
+    return {
+      trend,
+      strength,
+      ema50: ema,
+      currentPrice,
+      candlesInTrend
+    };
   }
 
   /**
@@ -96,12 +174,12 @@ export class TrendFollowerStrategy {
       : ((entryPrice - currentPrice) / entryPrice) * 100;
 
     // Take Profit
-    if (pnlPercent >= this.config.profitTarget) {
+    if (pnlPercent >= this.config.profitTargetPercent) {
       return { shouldClose: true, reason: `TP Hit: +${pnlPercent.toFixed(2)}%` };
     }
 
     // Stop Loss
-    if (pnlPercent <= -this.config.stopLoss) {
+    if (pnlPercent <= -this.config.stopLossPercent) {
       return { shouldClose: true, reason: `SL Hit: ${pnlPercent.toFixed(2)}%` };
     }
 
@@ -188,6 +266,11 @@ export class TrendFollowerStrategy {
       unrealizedPnLPercent: 0
     };
     
+    // Delete from database
+    OpenPositionRepository.deleteOpenPosition(this.strategyName).catch(err => {
+      console.error('Failed to delete open position:', err);
+    });
+    
     this.entrySignal = null;
 
     return closeSignal;
@@ -216,18 +299,21 @@ export class TrendFollowerStrategy {
         return this.closePosition(currentPrice, exitCheck.reason);
       }
 
-      // Check trend reversal
+      // Check CONFIRMED trend reversal
       if (this.currentPosition.type === 'LONG' && currentTrend === 'DOWN') {
-        // Close LONG and will open SHORT
-        const closeSignal = this.closePosition(currentPrice, 'Trend reversed to DOWN');
+        // Close LONG - tendance confirmée à la baisse
+        const closeSignal = this.closePosition(currentPrice, `Trend REVERSED to DOWN (${this.config.trendConfirmationCandles} candles confirmation)`);
         return closeSignal;
       }
 
       if (this.currentPosition.type === 'SHORT' && currentTrend === 'UP') {
-        // Close SHORT and will open LONG
-        const closeSignal = this.closePosition(currentPrice, 'Trend reversed to UP');
+        // Close SHORT - tendance confirmée à la hausse
+        const closeSignal = this.closePosition(currentPrice, `Trend REVERSED to UP (${this.config.trendConfirmationCandles} candles confirmation)`);
         return closeSignal;
       }
+      
+      // Si la tendance n'est pas confirmée (NONE), on garde la position
+      // Cela évite de fermer prématurément sur un simple pullback
 
       // Stay in position
       return {
@@ -247,7 +333,26 @@ export class TrendFollowerStrategy {
       };
     }
 
-    // No position - enter based on trend
+    // No position - enter based on CONFIRMED trend
+    if (currentTrend === 'NONE') {
+      // Pas de tendance confirmée, on attend
+      return {
+        type: 'HOLD',
+        timestamp,
+        price: currentPrice,
+        rsi: 50,
+        ema12: 0,
+        ema26: 0,
+        ema50: 0,
+        ema200: 0,
+        ma7: 0,
+        ma25: 0,
+        ma99: 0,
+        reason: 'Waiting for trend confirmation',
+        position: { ...this.currentPosition, currentCapital: this.initialCapital + this.totalPnL }
+      };
+    }
+    
     if (currentTrend === 'UP') {
       // Open LONG
       this.currentPosition = {
@@ -271,7 +376,7 @@ export class TrendFollowerStrategy {
         ma7: 0,
         ma25: 0,
         ma99: 0,
-        reason: `📈 Trend UP detected - Opening LONG (TP: +${this.config.profitTarget}% | SL: -${this.config.stopLoss}%)`,
+        reason: `📈 Trend UP CONFIRMED (${this.config.trendConfirmationCandles} candles) - Opening LONG (TP: +${this.config.profitTargetPercent}% | SL: -${this.config.stopLossPercent}%)`,
         position: {
           ...this.currentPosition,
           currentCapital: this.initialCapital + this.totalPnL
@@ -281,6 +386,12 @@ export class TrendFollowerStrategy {
       // Sauvegarder le signal d'entrée pour créer le CompletedTrade plus tard
       this.entrySignal = buySignal;
       this.lastTrendDirection = 'UP';
+      
+      // Save open position to database
+      OpenPositionRepository.saveOpenPosition(this.strategyName, this.currentPosition).catch(err => {
+        console.error('Failed to save open position:', err);
+      });
+      
       return buySignal;
     }
 
@@ -307,7 +418,7 @@ export class TrendFollowerStrategy {
         ma7: 0,
         ma25: 0,
         ma99: 0,
-        reason: `📉 Trend DOWN detected - Opening SHORT (TP: +${this.config.profitTarget}% | SL: -${this.config.stopLoss}%)`,
+        reason: `📉 Trend DOWN CONFIRMED (${this.config.trendConfirmationCandles} candles) - Opening SHORT (TP: +${this.config.profitTargetPercent}% | SL: -${this.config.stopLossPercent}%)`,
         position: {
           ...this.currentPosition,
           currentCapital: this.initialCapital + this.totalPnL
@@ -317,6 +428,12 @@ export class TrendFollowerStrategy {
       // Sauvegarder le signal d'entrée pour créer le CompletedTrade plus tard
       this.entrySignal = sellSignal;
       this.lastTrendDirection = 'DOWN';
+      
+      // Save open position to database
+      OpenPositionRepository.saveOpenPosition(this.strategyName, this.currentPosition).catch(err => {
+        console.error('Failed to save open position:', err);
+      });
+      
       return sellSignal;
     }
 
@@ -339,6 +456,15 @@ export class TrendFollowerStrategy {
         (this.currentPosition.entryPrice - currentPrice) * this.currentPosition.quantity;
       this.currentPosition.unrealizedPnLPercent = 
         ((this.currentPosition.entryPrice - currentPrice) / this.currentPosition.entryPrice) * 100;
+    }
+  }
+
+  /**
+   * Update position PnL with current market price (for real-time updates)
+   */
+  updatePositionWithCurrentPrice(currentPrice: number): void {
+    if (this.currentPosition.type !== 'NONE') {
+      this.updatePositionPnL(currentPrice);
     }
   }
 
@@ -394,6 +520,13 @@ export class TrendFollowerStrategy {
     this.totalPnL = 0;
     this.signalHistory = [];
     this.completedTrades = [];
+    
+    // Restore open position from database if exists
+    const openPosition = await OpenPositionRepository.getOpenPosition(this.strategyName);
+    if (openPosition && openPosition.type !== 'NONE') {
+      this.currentPosition = openPosition;
+      console.log(`    📊 Restored open ${openPosition.type} position @ ${openPosition.entryPrice.toFixed(2)} USDT from database`);
+    }
 
     // Charger les completed trades depuis la nouvelle table
     const completedTrades = await CompletedTradeRepository.getCompletedTradesByStrategy('Trend Follower', 100);
@@ -435,6 +568,13 @@ export class TrendFollowerStrategy {
 
       const mostRecentSignal = this.signalHistory[0];
       this.lastSignal = mostRecentSignal;
+      
+      console.log(`📊 Signal history loaded: ${this.signalHistory.length} signals`);
+      console.log(`   First 3 signals:`, this.signalHistory.slice(0, 3).map(s => ({
+        type: s.type,
+        price: s.price,
+        timestamp: new Date(s.timestamp).toLocaleString()
+      })));
       
       // Vérifier si le signal le plus récent est une ouverture de position (BUY/SELL)
       if (mostRecentSignal.type === 'BUY' || mostRecentSignal.type === 'SELL') {

@@ -120,6 +120,15 @@ export class MomentumCrossoverStrategy {
   }
 
   /**
+   * Update position PnL with current market price (for real-time updates)
+   */
+  updatePositionWithCurrentPrice(currentPrice: number): void {
+    if (this.currentPosition.type !== 'NONE') {
+      this.updatePositionPnL(currentPrice);
+    }
+  }
+
+  /**
    * Check if position should be closed
    */
   private shouldClosePosition(currentPrice: number): { shouldClose: boolean; reason: string } {
@@ -299,11 +308,47 @@ export class MomentumCrossoverStrategy {
     const currentPrice = candles[candles.length - 1].close;
     const timestamp = Date.now();
 
+    // Detect crossovers early so they are available for both exit and entry logic
+    const isBullishCrossover = prevEmaFast < prevEmaSlow && emaFast > emaSlow;
+    const isBearishCrossover = prevEmaFast > prevEmaSlow && emaFast < emaSlow;
+    this.isBullishCrossover = isBullishCrossover;
+    this.isBearishCrossover = isBearishCrossover;
+
     // Check if we should close current position
     if (this.currentPosition.type !== 'NONE') {
+      // Check TP/SL/MaxTime first
       const exitCheck = this.shouldClosePosition(currentPrice);
       if (exitCheck.shouldClose) {
         const closeSignal = this.closePosition(currentPrice, exitCheck.reason);
+        closeSignal.rsi = rsi;
+        closeSignal.ema12 = emaFast;
+        closeSignal.ema26 = emaSlow;
+        closeSignal.ema50 = emaSlow;
+        closeSignal.ema200 = ema200;
+        closeSignal.ma7 = ma7;
+        closeSignal.ma25 = ma25;
+        closeSignal.ma99 = ma99;
+        return closeSignal;
+      }
+
+      // Check for reverse crossover (more flexible exit)
+      if (this.currentPosition.type === 'LONG' && isBearishCrossover) {
+        console.log('[Momentum] 🔄 Bearish crossover detected - Closing LONG position');
+        const closeSignal = this.closePosition(currentPrice, 'Bearish crossover detected (exit signal)');
+        closeSignal.rsi = rsi;
+        closeSignal.ema12 = emaFast;
+        closeSignal.ema26 = emaSlow;
+        closeSignal.ema50 = emaSlow;
+        closeSignal.ema200 = ema200;
+        closeSignal.ma7 = ma7;
+        closeSignal.ma25 = ma25;
+        closeSignal.ma99 = ma99;
+        return closeSignal;
+      }
+
+      if (this.currentPosition.type === 'SHORT' && isBullishCrossover) {
+        console.log('[Momentum] 🔄 Bullish crossover detected - Closing SHORT position');
+        const closeSignal = this.closePosition(currentPrice, 'Bullish crossover detected (exit signal)');
         closeSignal.rsi = rsi;
         closeSignal.ema12 = emaFast;
         closeSignal.ema26 = emaSlow;
@@ -352,13 +397,7 @@ export class MomentumCrossoverStrategy {
       };
     }
 
-    // Detect crossovers
-    const isBullishCrossover = prevEmaFast < prevEmaSlow && emaFast > emaSlow;
-    const isBearishCrossover = prevEmaFast > prevEmaSlow && emaFast < emaSlow;
-    
-    // Store crossover flags for frontend display
-    this.isBullishCrossover = isBullishCrossover;
-    this.isBearishCrossover = isBearishCrossover;
+    // Crossovers already computed above
 
     // Debug logs for crossover detection
     console.log(`[Momentum] EMA12: ${emaFast.toFixed(2)} | EMA26: ${emaSlow.toFixed(2)} | EMA200: ${ema200.toFixed(2)}`);

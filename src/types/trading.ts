@@ -35,6 +35,8 @@ export interface TradingSignal {
   ma99: number;
   reason: string;
   position?: Position;
+  // Optional signal metadata used by some strategies (e.g., Bollinger)
+  strength?: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 export interface CompletedTrade {
@@ -125,7 +127,7 @@ export interface StrategyConfig {
 
 export interface StrategyPerformance {
   strategyName: string;
-  strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER';
+  strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK';
   totalPnL: number;
   totalTrades: number;
   winningTrades: number;
@@ -136,19 +138,21 @@ export interface StrategyPerformance {
   completedTrades?: CompletedTrade[]; // Trades complets (entrée + sortie)
   isActive: boolean;
   currentCapital: number; // Capital actuel (initial + P&L)
+  // Strategy config (TP, SL, Max Position) - null = désactivé
+  config?: {
+    profitTargetPercent?: number | null;
+    stopLossPercent?: number | null;
+    maxPositionTime?: number | null;
+  };
   // Strategy-specific flags
   isBullishCrossover?: boolean; // Momentum Crossover
   isBearishCrossover?: boolean; // Momentum Crossover
   isVolumeBreakout?: boolean; // Volume MACD
   isMACDBullish?: boolean; // Volume MACD
   isMACDBearish?: boolean; // Volume MACD
-  isPriceAccelerating?: boolean; // Neural Scalper
-  isVolatilityHigh?: boolean; // Neural Scalper
-  isMomentumStrong?: boolean; // Neural Scalper
-  // Neural Scalper detailed values
-  velocity?: number; // Vélocité du prix
-  acceleration?: number; // Accélération du prix
-  rsiMomentum?: number; // Momentum RSI
-  volumeSpike?: boolean; // Pic de volume
+  // Additional flags used by some strategies
+  isPriceAccelerating?: boolean;
+  isVolatilityHigh?: boolean;
+  isMomentumStrong?: boolean;
 }
 

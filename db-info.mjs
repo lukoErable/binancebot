@@ -45,6 +45,34 @@ try {
   `);
   console.table(byStrategy.rows);
 
+  // Configuration des stratégies
+  console.log('\n⚙️ Configuration des stratégies:');
+  const strategiesConfig = await pool.query(`
+    SELECT 
+      name,
+      is_active,
+      config->'profitTargetPercent' as take_profit,
+      config->'stopLossPercent' as stop_loss,
+      config->'maxPositionTime' as max_position_time,
+      TO_CHAR(updated_at, 'DD/MM HH24:MI') as last_update
+    FROM strategies
+    ORDER BY name;
+  `);
+  
+  console.log('\n📊 Paramètres de Trading par Stratégie:');
+  strategiesConfig.rows.forEach(row => {
+    const tp = row.take_profit || 'Default';
+    const sl = row.stop_loss || 'Default';
+    const maxPos = row.max_position_time || 'Default';
+    const riskReward = (tp && sl && tp !== 'Default' && sl !== 'Default') 
+      ? `1:${(parseFloat(tp) / parseFloat(sl)).toFixed(2)}`
+      : 'N/A';
+    
+    console.log(`\n${row.name} ${row.is_active ? '🟢' : '🔴'}`);
+    console.log(`  TP: ${tp}% | SL: ${sl}% | Max: ${maxPos} min | R/R: ${riskReward}`);
+    console.log(`  Dernière modif: ${row.last_update}`);
+  });
+
   // Derniers signaux
   console.log('\n🕐 Derniers signaux:');
   const recent = await pool.query(`
@@ -122,6 +150,54 @@ try {
     console.table(recentCompleted.rows);
   } else {
     console.log('⚠️  La table "completed_trades" n\'existe pas encore.');
+  }
+
+  // 🎯 Afficher les positions ouvertes
+  const openPositionsExists = await pool.query(`
+    SELECT EXISTS (
+      SELECT FROM information_schema.tables 
+      WHERE table_name = 'open_positions'
+    );
+  `);
+
+  if (openPositionsExists.rows[0].exists) {
+    console.log('\n🎯 Positions Ouvertes Actuelles:');
+    const openPositions = await pool.query(`
+      SELECT 
+        strategy_name,
+        position_type,
+        entry_price,
+        entry_time,
+        quantity,
+        unrealized_pnl,
+        unrealized_pnl_percent,
+        created_at,
+        updated_at
+      FROM open_positions 
+      ORDER BY updated_at DESC;
+    `);
+    
+    if (openPositions.rows.length === 0) {
+      console.log('  ℹ️  Aucune position ouverte actuellement');
+    } else {
+      console.table(openPositions.rows);
+      
+      openPositions.rows.forEach(pos => {
+        const entryDate = new Date(parseInt(pos.entry_time));
+        const duration = Date.now() - parseInt(pos.entry_time);
+        const minutes = Math.floor(duration / 60000);
+        const hours = Math.floor(minutes / 60);
+        
+        console.log(`\n${pos.strategy_name}:`);
+        console.log(`  Type: ${pos.position_type === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}`);
+        console.log(`  Entry: $${parseFloat(pos.entry_price).toFixed(2)} @ ${entryDate.toLocaleString('fr-FR')}`);
+        console.log(`  Quantity: ${pos.quantity}`);
+        console.log(`  Unrealized P&L: ${pos.unrealized_pnl >= 0 ? '+' : ''}${parseFloat(pos.unrealized_pnl).toFixed(2)} USDT (${pos.unrealized_pnl_percent >= 0 ? '+' : ''}${parseFloat(pos.unrealized_pnl_percent).toFixed(2)}%)`);
+        console.log(`  Duration: ${hours}h ${minutes % 60}m`);
+      });
+    }
+  } else {
+    console.log('\n⚠️  La table "open_positions" n\'existe pas encore.');
   }
 
 } catch (error) {

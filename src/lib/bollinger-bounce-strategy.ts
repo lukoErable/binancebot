@@ -49,6 +49,32 @@ export class BollingerBounceStrategy {
   }
 
   /**
+   * Update position PnL
+   */
+  private updatePositionPnL(currentPrice: number): void {
+    if (this.currentPosition.type === 'NONE') return;
+
+    if (this.currentPosition.type === 'LONG') {
+      const priceDiff = currentPrice - this.currentPosition.entryPrice;
+      this.currentPosition.unrealizedPnL = priceDiff * this.currentPosition.quantity;
+      this.currentPosition.unrealizedPnLPercent = (priceDiff / this.currentPosition.entryPrice) * 100;
+    } else if (this.currentPosition.type === 'SHORT') {
+      const priceDiff = this.currentPosition.entryPrice - currentPrice;
+      this.currentPosition.unrealizedPnL = priceDiff * this.currentPosition.quantity;
+      this.currentPosition.unrealizedPnLPercent = (priceDiff / this.currentPosition.entryPrice) * 100;
+    }
+  }
+
+  /**
+   * Update position PnL with current market price (for real-time updates)
+   */
+  updatePositionWithCurrentPrice(currentPrice: number): void {
+    if (this.currentPosition.type !== 'NONE') {
+      this.updatePositionPnL(currentPrice);
+    }
+  }
+
+  /**
    * Helper: Create and save CompletedTrade
    */
   private saveCompletedTrade(exitPrice: number, exitReason: string, pnl: number): void {
@@ -219,10 +245,9 @@ export class BollingerBounceStrategy {
     const hasVolumeConfirmation = volumeRatio >= this.config.volumeThreshold;
 
     // Update unrealized PnL for existing position
+    this.updatePositionPnL(currentPrice);
+    
     if (this.currentPosition.type === 'LONG') {
-      const priceDiff = currentPrice - this.currentPosition.entryPrice;
-      this.currentPosition.unrealizedPnL = priceDiff * this.currentPosition.quantity;
-      this.currentPosition.unrealizedPnLPercent = (priceDiff / this.currentPosition.entryPrice) * 100;
 
       // Check stop loss
       const stopLossPrice = this.currentPosition.entryPrice * (1 - this.config.stopLossPercent / 100);

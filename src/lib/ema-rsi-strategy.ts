@@ -101,6 +101,15 @@ export class TradingStrategy {
   }
 
   /**
+   * Update position PnL with current market price (for real-time updates)
+   */
+  updatePositionWithCurrentPrice(currentPrice: number): void {
+    if (this.currentPosition.type !== 'NONE') {
+      this.updatePositionPnL(currentPrice);
+    }
+  }
+
+  /**
    * Check if position should be closed based on exit conditions
    */
   private shouldClosePosition(currentPrice: number): { shouldClose: boolean; reason: string } {

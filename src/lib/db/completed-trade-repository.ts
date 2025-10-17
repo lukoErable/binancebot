@@ -42,9 +42,14 @@ export class CompletedTradeRepository {
       const tradeId = result.rows[0]?.id;
       
       console.log(`💾 Completed trade saved [ID: ${tradeId}]: ${trade.strategyName} - ${trade.type} | Entry: $${trade.entryPrice.toFixed(2)} → Exit: $${trade.exitPrice.toFixed(2)} | PnL: ${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)} USDT (${trade.pnlPercent >= 0 ? '+' : ''}${trade.pnlPercent.toFixed(2)}%) ${trade.isWin ? '✅' : '❌'}`);
-    } catch (error) {
-      console.error('❌ Error saving completed trade:', error);
-      console.error('Trade data:', trade);
+    } catch (error: any) {
+      // Silently ignore duplicate key errors (code 23505)
+      if (error.code === '23505') {
+        console.log(`⏭️  Skipping duplicate completed trade: ${trade.strategyName} - ${trade.type} @ ${trade.exitPrice.toFixed(2)}`);
+      } else {
+        console.error('❌ Error saving completed trade:', error);
+        console.error('Trade data:', trade);
+      }
     }
   }
 

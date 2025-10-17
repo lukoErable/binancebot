@@ -3,6 +3,30 @@ import { pool } from './database';
 
 export class StrategyRepository {
   /**
+   * Ensure a strategy row exists in DB; if missing, create it
+   */
+  static async ensureStrategyExists(
+    name: string,
+    type: string,
+    isActive: boolean = false,
+    config?: { profitTargetPercent?: number; stopLossPercent?: number; maxPositionTime?: number }
+  ): Promise<void> {
+    try {
+      const checkQuery = `SELECT 1 FROM strategies WHERE name = $1 LIMIT 1`;
+      const exists = await pool.query(checkQuery, [name]);
+      if (exists.rowCount && exists.rowCount > 0) return;
+
+      const insertQuery = `
+        INSERT INTO strategies (name, type, is_active, config, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `;
+      await pool.query(insertQuery, [name, type, isActive, JSON.stringify(config || {})]);
+      console.log(`✅ Strategy created in DB: ${name} (${type})`);
+    } catch (error) {
+      console.error('❌ Error ensuring strategy exists:', error);
+    }
+  }
+  /**
    * Save strategy performance snapshot
    */
   static async savePerformance(performance: StrategyPerformance): Promise<void> {
@@ -111,6 +135,46 @@ export class StrategyRepository {
     } catch (error) {
       console.error('❌ Error fetching strategies:', error);
       return [];
+    }
+  }
+
+  /**
+   * Update strategy configuration (TP, SL, Max Position Time)
+   */
+  static async updateStrategyConfig(
+    strategyName: string,
+    config: {
+      profitTarget?: number;
+      stopLoss?: number;
+      maxPositionTime?: number;
+    }
+  ): Promise<void> {
+    try {
+      // Get current config
+      const currentQuery = `SELECT config FROM strategies WHERE name = $1`;
+      const currentResult = await pool.query(currentQuery, [strategyName]);
+      const currentConfig = currentResult.rows[0]?.config || {};
+
+      // Merge with new config (null = désactivé)
+      const updatedConfig = {
+        ...currentConfig,
+        profitTargetPercent: config.profitTarget !== undefined ? config.profitTarget : currentConfig.profitTargetPercent,
+        stopLossPercent: config.stopLoss !== undefined ? config.stopLoss : currentConfig.stopLossPercent,
+        maxPositionTime: config.maxPositionTime !== undefined ? config.maxPositionTime : currentConfig.maxPositionTime
+      };
+
+      // Update in database
+      const updateQuery = `
+        UPDATE strategies
+        SET config = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE name = $2
+      `;
+      
+      await pool.query(updateQuery, [JSON.stringify(updatedConfig), strategyName]);
+      console.log(`✅ Strategy "${strategyName}" config updated:`, config);
+    } catch (error) {
+      console.error('❌ Error updating strategy config:', error);
+      throw error;
     }
   }
 }

@@ -1,10 +1,10 @@
 import { Candle, StrategyPerformance } from '@/types/trading';
+import { AtrTrendPullbackStrategy, atrPullbackDefaultConfig } from './atr-pullback-strategy';
 import { BollingerBounceStrategy, defaultBollingerBounceConfig } from './bollinger-bounce-strategy';
 import StrategyRepository from './db/strategy-repository';
 import TradeRepository from './db/trade-repository';
 import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
 import { MomentumCrossoverStrategy, momentumStrategyConfig } from './momentum-strategy';
-import { NeuralScalperStrategy, neuralScalperConfig } from './neural-scalper-strategy';
 import { TrendFollowerStrategy, trendFollowerConfig } from './trend-follower-strategy';
 import { VolumeMACDStrategy, volumeMACDStrategyConfig } from './volume-macd-strategy';
 
@@ -14,8 +14,8 @@ import { VolumeMACDStrategy, volumeMACDStrategyConfig } from './volume-macd-stra
  */
 export class StrategyManager {
   private strategies: Map<string, {
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy | TrendFollowerStrategy;
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER';
+    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy;
+    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK';
     isActive: boolean;
   }>;
   private savingSignals: Set<string> = new Set(); // Verrou pour éviter les sauvegardes multiples
@@ -27,12 +27,20 @@ export class StrategyManager {
     this.addStrategy('RSI + EMA Strategy', new TradingStrategy(defaultStrategyConfig), 'RSI_EMA', false);
     this.addStrategy('Momentum Crossover', new MomentumCrossoverStrategy(momentumStrategyConfig), 'MOMENTUM_CROSSOVER', false);
     this.addStrategy('Volume Breakout', new VolumeMACDStrategy(volumeMACDStrategyConfig), 'VOLUME_MACD', false);
-    this.addStrategy('Neural Scalper', new NeuralScalperStrategy(neuralScalperConfig), 'NEURAL_SCALPER', false);
     this.addStrategy('Bollinger Bounce', new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', false);
-    this.addStrategy('Trend Follower', new TrendFollowerStrategy(trendFollowerConfig), 'TREND_FOLLOWER', false);
+    this.addStrategy('Trend Follower', new TrendFollowerStrategy(trendFollowerConfig, 'Trend Follower'), 'TREND_FOLLOWER', false);
+    this.addStrategy('ATR Trend Pullback', new AtrTrendPullbackStrategy(atrPullbackDefaultConfig), 'ATR_PULLBACK', false);
     
     // Load strategy states from database
     this.loadFromDatabase();
+
+    // Best effort: ensure ATR strategy exists in DB
+    StrategyRepository.ensureStrategyExists(
+      'ATR Trend Pullback',
+      'ATR_PULLBACK',
+      false,
+      { profitTargetPercent: atrPullbackDefaultConfig.profitTargetPercent, stopLossPercent: atrPullbackDefaultConfig.stopLossPercent, maxPositionTime: Math.floor(atrPullbackDefaultConfig.maxPositionTime / (60 * 1000)) }
+    ).catch(() => {});
   }
 
   /**
@@ -40,14 +48,40 @@ export class StrategyManager {
    */
   private async loadFromDatabase(): Promise<void> {
     try {
-      // Load strategy activation states
+      // Load strategy activation states and configs
       const strategies = await StrategyRepository.getAllStrategies();
       strategies.forEach((dbStrategy: any) => {
         const strategyName = dbStrategy.name;
         const isActive = dbStrategy.is_active;
+        const config = dbStrategy.config || {};
         
         if (this.strategies.has(strategyName)) {
-          this.strategies.get(strategyName)!.isActive = isActive;
+          const strategyData = this.strategies.get(strategyName)!;
+          strategyData.isActive = isActive;
+          
+          // Apply config if available
+          if (config.profitTargetPercent !== undefined || config.stopLossPercent !== undefined || config.maxPositionTime !== undefined) {
+            const strategy = strategyData.strategy as any;
+            if (strategy.config) {
+              if (config.profitTargetPercent !== undefined) {
+                strategy.config.profitTargetPercent = config.profitTargetPercent;
+              }
+              if (config.stopLossPercent !== undefined) {
+                strategy.config.stopLossPercent = config.stopLossPercent;
+              }
+              if (config.maxPositionTime !== undefined) {
+                // Convert minutes to milliseconds for strategy config
+                strategy.config.maxPositionTime = config.maxPositionTime * 60 * 1000;
+              }
+              console.log(`⚙️ Loaded custom config for ${strategyName}:`, {
+                TP: config.profitTargetPercent,
+                SL: config.stopLossPercent,
+                MaxPosMin: config.maxPositionTime,
+                MaxPosMs: config.maxPositionTime ? config.maxPositionTime * 60 * 1000 : undefined
+              });
+            }
+          }
+          
           console.log(`📊 Loaded strategy state: ${strategyName} = ${isActive ? 'ON' : 'OFF'}`);
         }
       });
@@ -82,8 +116,8 @@ export class StrategyManager {
    */
   addStrategy(
     name: string,
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy | TrendFollowerStrategy,
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER',
+    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy,
+    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK',
     isActive: boolean = true
   ): void {
     this.strategies.set(name, { strategy, type, isActive });
@@ -121,6 +155,55 @@ export class StrategyManager {
   }
 
   /**
+   * Update strategy configuration (TP, SL, Max Position Time)
+   */
+  updateStrategyConfig(
+    name: string,
+    config: {
+      profitTarget?: number | null;
+      stopLoss?: number | null;
+      maxPositionTime?: number | null;
+    }
+  ): boolean {
+    const strategyData = this.strategies.get(name);
+    if (strategyData) {
+      const strategy = strategyData.strategy as any;
+      if (strategy.config) {
+        // null = désactivé, on garde l'ancienne valeur mais on pourrait aussi mettre Infinity
+        if (config.profitTarget !== undefined && config.profitTarget !== null) {
+          strategy.config.profitTargetPercent = config.profitTarget;
+        }
+        if (config.stopLoss !== undefined && config.stopLoss !== null) {
+          strategy.config.stopLossPercent = config.stopLoss;
+        }
+        if (config.maxPositionTime !== undefined && config.maxPositionTime !== null) {
+          // Convert minutes to milliseconds for strategy config
+          strategy.config.maxPositionTime = config.maxPositionTime * 60 * 1000;
+        }
+        
+        console.log(`⚙️ Updated config for "${name}":`, {
+          TP: config.profitTarget,
+          SL: config.stopLoss,
+          MaxPosMin: config.maxPositionTime,
+          MaxPosMs: config.maxPositionTime ? config.maxPositionTime * 60 * 1000 : null
+        });
+        
+        // If there's an active position, log that new params will be applied
+        const positionInfo = strategy.getPositionInfo();
+        if (positionInfo.position && positionInfo.position.type !== 'NONE') {
+          console.log(`🔄 Active ${positionInfo.position.type} position detected - New TP/SL will be applied on next price update`);
+          console.log(`   Entry: $${positionInfo.position.entryPrice.toFixed(2)}`);
+          console.log(`   Current P&L: ${positionInfo.position.unrealizedPnLPercent?.toFixed(2)}%`);
+          console.log(`   New TP: ${config.profitTarget}% | New SL: -${config.stopLoss}%`);
+        }
+        
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Analyze market with all active strategies
    */
   async analyzeAllStrategies(candles: Candle[]): Promise<void> {
@@ -139,12 +222,25 @@ export class StrategyManager {
           // Récupérer le lastSignal AVANT executeTrade
           const positionInfo = strategyData.strategy.getPositionInfo();
           const lastSignal = positionInfo.lastSignal;
+          const currentPosition = positionInfo.position;
           
           // Duplicata = même type + même prix exact + moins de 2 secondes
           const isMemoryDuplicate = lastSignal && 
                                    lastSignal.type === signal.type && 
                                    Math.abs(lastSignal.price - signal.price) < 0.5 &&
                                    (signal.timestamp - lastSignal.timestamp) < 2000;
+          
+          // Check si on essaie d'ouvrir une position alors qu'on en a déjà une
+          const isEntrySignal = signal.type === 'BUY' || signal.type === 'SELL';
+          const hasPosition = currentPosition && currentPosition.type !== 'NONE';
+          const isDuplicateEntry = isEntrySignal && hasPosition && 
+                                   ((signal.type === 'BUY' && currentPosition.type === 'LONG') ||
+                                    (signal.type === 'SELL' && currentPosition.type === 'SHORT'));
+          
+          if (isDuplicateEntry) {
+            console.log(`⏭️  Already in ${currentPosition.type} position, skipping ${signal.type} @ ${signal.price.toFixed(2)}`);
+            continue;
+          }
           
           if (!isMemoryDuplicate) {
             // Créer une clé unique (sans timestamp pour éviter les doublons à la milliseconde près)
@@ -153,7 +249,7 @@ export class StrategyManager {
             // Vérifier si ce signal est déjà en cours de sauvegarde (ATOMIC CHECK + ADD)
             if (this.savingSignals.has(signalKey)) {
               console.log(`⏭️  Signal already being saved: ${signal.type} @ ${signal.price.toFixed(2)}`);
-              return; // Skip immediately
+              continue; // Skip to next strategy (not return)
             }
             
             // Marquer comme en cours de sauvegarde AVANT l'await (synchrone, donc atomic)
@@ -168,9 +264,12 @@ export class StrategyManager {
               strategyData.strategy.executeTrade(signal);
             } catch (err) {
               console.error(`Failed to save trade for ${name}:`, err);
+              // Remove from saving set if save failed
+              this.savingSignals.delete(signalKey);
+              continue; // Skip to next strategy
             } finally {
-              // Retirer du verrou après un délai plus long (5 secondes)
-              setTimeout(() => this.savingSignals.delete(signalKey), 5000);
+              // Retirer du verrou après un délai plus long (10 secondes pour les scalping strategies)
+              setTimeout(() => this.savingSignals.delete(signalKey), 10000);
             }
           } else {
             console.log(`⏭️  Skipping duplicate: ${signal.type} @ ${signal.price.toFixed(2)} (saved ${((signal.timestamp - lastSignal.timestamp) / 1000).toFixed(1)}s ago)`);
@@ -185,6 +284,17 @@ export class StrategyManager {
   }
 
   /**
+   * Update all strategies with current market price for real-time P&L calculation
+   */
+  updateAllStrategiesWithCurrentPrice(currentPrice: number): void {
+    this.strategies.forEach((strategyData) => {
+      if (strategyData.isActive && 'updatePositionWithCurrentPrice' in strategyData.strategy) {
+        (strategyData.strategy as any).updatePositionWithCurrentPrice(currentPrice);
+      }
+    });
+  }
+
+  /**
    * Get performance of all strategies
    */
   getAllPerformances(): StrategyPerformance[] {
@@ -195,6 +305,15 @@ export class StrategyManager {
       const winRate = positionInfo.totalTrades > 0 
         ? (positionInfo.winningTrades / positionInfo.totalTrades) * 100 
         : 0;
+
+      // Extract config from strategy
+      const strategy = strategyData.strategy as any;
+      const strategyConfig = strategy.config ? {
+        profitTargetPercent: strategy.config.profitTargetPercent,
+        stopLossPercent: strategy.config.stopLossPercent,
+        // Convert milliseconds back to minutes for display
+        maxPositionTime: strategy.config.maxPositionTime ? strategy.config.maxPositionTime / (60 * 1000) : undefined
+      } : undefined;
 
       performances.push({
         strategyName: name,
@@ -209,6 +328,7 @@ export class StrategyManager {
         completedTrades: 'completedTrades' in positionInfo ? (positionInfo as any).completedTrades : undefined,
         isActive: strategyData.isActive,
         currentCapital: positionInfo.currentCapital || 100000,
+        config: strategyConfig,
         // Include strategy-specific flags
         isBullishCrossover: 'isBullishCrossover' in positionInfo ? (positionInfo as any).isBullishCrossover : undefined,
         isBearishCrossover: 'isBearishCrossover' in positionInfo ? (positionInfo as any).isBearishCrossover : undefined,
@@ -247,7 +367,7 @@ export class StrategyManager {
   /**
    * Get strategy by name
    */
-  getStrategy(name: string): TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | NeuralScalperStrategy | BollingerBounceStrategy | TrendFollowerStrategy | undefined {
+  getStrategy(name: string): TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | undefined {
     return this.strategies.get(name)?.strategy;
   }
 
@@ -284,6 +404,10 @@ export class StrategyManager {
       const { CompletedTradeRepository } = await import('./db/completed-trade-repository');
       await CompletedTradeRepository.deleteStrategyCompletedTrades(name);
       
+      // Delete open position from database
+      const { default: OpenPositionRepository } = await import('./db/open-position-repository');
+      await OpenPositionRepository.deleteOpenPosition(name);
+      
       // Reset strategy state by removing and re-adding it
       const strategyType = strategyData.type;
       const strategy = strategyData.strategy;
@@ -301,15 +425,15 @@ export class StrategyManager {
       } else if (strategyType === 'VOLUME_MACD') {
         const { VolumeMACDStrategy, volumeMACDStrategyConfig } = await import('./volume-macd-strategy');
         this.addStrategy(name, new VolumeMACDStrategy(volumeMACDStrategyConfig), 'VOLUME_MACD', false);
-      } else if (strategyType === 'NEURAL_SCALPER') {
-        const { NeuralScalperStrategy, neuralScalperConfig } = await import('./neural-scalper-strategy');
-        this.addStrategy(name, new NeuralScalperStrategy(neuralScalperConfig), 'NEURAL_SCALPER', false);
       } else if (strategyType === 'BOLLINGER_BOUNCE') {
         const { BollingerBounceStrategy, defaultBollingerBounceConfig } = await import('./bollinger-bounce-strategy');
         this.addStrategy(name, new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', false);
       } else if (strategyType === 'TREND_FOLLOWER') {
         const { TrendFollowerStrategy, trendFollowerConfig } = await import('./trend-follower-strategy');
-        this.addStrategy(name, new TrendFollowerStrategy(trendFollowerConfig), 'TREND_FOLLOWER', false);
+        this.addStrategy(name, new TrendFollowerStrategy(trendFollowerConfig, name), 'TREND_FOLLOWER', false);
+      } else if (strategyType === 'ATR_PULLBACK') {
+        const { AtrTrendPullbackStrategy, atrPullbackDefaultConfig } = await import('./atr-pullback-strategy');
+        this.addStrategy(name, new AtrTrendPullbackStrategy(atrPullbackDefaultConfig), 'ATR_PULLBACK', false);
       }
       
       console.log(`✅ Strategy "${name}" has been reset to initial state`);

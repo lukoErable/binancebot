@@ -1,16 +1,18 @@
 'use client';
 
 import { StrategyPerformance, StrategyState } from '@/types/trading';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { HiClock } from 'react-icons/hi';
 import { CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface BinanceChartProps {
   state: StrategyState;
   selectedStrategy?: string;
   strategyPerformances?: StrategyPerformance[];
+  localConfigCache?: Record<string, { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }>;
 }
 
-export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strategyPerformances = [] }: BinanceChartProps) {
+export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strategyPerformances = [], localConfigCache = {} }: BinanceChartProps) {
   const [showEMA12, setShowEMA12] = useState(true);
   const [showEMA26, setShowEMA26] = useState(true);
   const [showEMA50, setShowEMA50] = useState(true);
@@ -21,25 +23,118 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
   const getStrategyColor = (strategyType: string) => {
     switch (strategyType) {
       case 'RSI_EMA':
-        return { bg: 'bg-blue-500', text: 'text-blue-400', border: 'border-blue-400' };
+        return { bg: 'bg-blue-500', text: 'text-blue-400', border: 'border-blue-400', accent: 'bg-blue-400' };
       case 'MOMENTUM_CROSSOVER':
-        return { bg: 'bg-purple-500', text: 'text-purple-400', border: 'border-purple-400' };
+        return { bg: 'bg-purple-500', text: 'text-purple-400', border: 'border-purple-400', accent: 'bg-purple-400' };
       case 'VOLUME_MACD':
-        return { bg: 'bg-orange-500', text: 'text-orange-400', border: 'border-orange-400' };
-      case 'NEURAL_SCALPER':
-        return { bg: 'bg-pink-500', text: 'text-pink-400', border: 'border-pink-400' };
+        return { bg: 'bg-orange-500', text: 'text-orange-400', border: 'border-orange-400', accent: 'bg-orange-400' };
       case 'BOLLINGER_BOUNCE':
-        return { bg: 'bg-teal-500', text: 'text-teal-400', border: 'border-teal-400' };
+        return { bg: 'bg-teal-500', text: 'text-teal-400', border: 'border-teal-400', accent: 'bg-teal-400' };
       case 'TREND_FOLLOWER':
-        return { bg: 'bg-cyan-500', text: 'text-cyan-400', border: 'border-cyan-400' };
+        return { bg: 'bg-cyan-500', text: 'text-cyan-400', border: 'border-cyan-400', accent: 'bg-cyan-400' };
       default:
-        return { bg: 'bg-blue-500', text: 'text-blue-400', border: 'border-blue-400' };
+        return { bg: 'bg-blue-500', text: 'text-blue-400', border: 'border-blue-400', accent: 'bg-blue-400' };
     }
   };
 
   // Get current strategy data
   const currentStrategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
-  const strategyColors = currentStrategy ? getStrategyColor(currentStrategy.strategyType) : { bg: 'bg-blue-600', text: 'text-blue-400', border: 'border-blue-400' };
+  const strategyColors = currentStrategy ? getStrategyColor(currentStrategy.strategyType) : { bg: 'bg-blue-600', text: 'text-blue-400', border: 'border-blue-400', accent: 'bg-blue-400' };
+
+  // Calculate TP/SL prices and time remaining for selected strategy
+  const getTradeLevels = () => {
+    if (!currentStrategy || !currentStrategy.currentPosition || currentStrategy.currentPosition.type === 'NONE') {
+      return { tpPrice: null, slPrice: null, timeRemaining: null };
+    }
+
+    const position = currentStrategy.currentPosition;
+    // Utiliser le cache local en priorité, puis la config SSE
+    const cachedConfig = localConfigCache[currentStrategy.strategyName];
+    const config = cachedConfig ? { ...currentStrategy.config, ...cachedConfig } : currentStrategy.config;
+    const entryPrice = position.entryPrice;
+
+    let tpPrice = null;
+    let slPrice = null;
+
+    if (config?.profitTargetPercent && config.profitTargetPercent !== null) {
+      if (position.type === 'LONG') {
+        tpPrice = entryPrice * (1 + config.profitTargetPercent / 100);
+      } else if (position.type === 'SHORT') {
+        tpPrice = entryPrice * (1 - config.profitTargetPercent / 100);
+      }
+    }
+
+    if (config?.stopLossPercent && config.stopLossPercent !== null) {
+      if (position.type === 'LONG') {
+        slPrice = entryPrice * (1 - config.stopLossPercent / 100);
+      } else if (position.type === 'SHORT') {
+        slPrice = entryPrice * (1 + config.stopLossPercent / 100);
+      }
+    }
+
+    // Calculate elapsed time and time remaining
+    let timeRemaining = null;
+    let timeElapsed = null;
+    
+    if (position.entryTime) {
+      const elapsedMs = Date.now() - position.entryTime;
+      const elapsedMinutes = Math.floor(elapsedMs / 60000);
+      const elapsedSeconds = Math.floor((elapsedMs % 60000) / 1000);
+      const elapsedHours = Math.floor(elapsedMinutes / 60);
+      
+      // Format elapsed time - heures si >= 60 minutes
+      if (elapsedMinutes >= 60) {
+        timeElapsed = `${elapsedHours}h ${elapsedMinutes % 60}m`;
+      } else {
+        timeElapsed = `${elapsedMinutes}m ${elapsedSeconds}s`;
+      }
+      
+      // Calculate time remaining
+      if (config?.maxPositionTime && config.maxPositionTime !== null) {
+        const maxTimeMs = config.maxPositionTime * 60 * 1000;
+        const remainingMs = maxTimeMs - elapsedMs;
+        
+        if (remainingMs > 0) {
+          const minutes = Math.floor(remainingMs / 60000);
+          const seconds = Math.floor((remainingMs % 60000) / 1000);
+          const hours = Math.floor(minutes / 60);
+          
+          // Format - heures si >= 60 minutes
+          if (minutes >= 60) {
+            timeRemaining = `${hours}h ${minutes % 60}m`;
+          } else {
+            timeRemaining = `${minutes}m ${seconds}s`;
+          }
+        } else {
+          timeRemaining = 'Expiré';
+        }
+      }
+    }
+
+    return { 
+      tpPrice, 
+      slPrice, 
+      timeRemaining,
+      timeElapsed,
+      positionType: position.type,
+      unrealizedPnL: position.unrealizedPnL,
+      unrealizedPnLPercent: position.unrealizedPnLPercent
+    };
+  };
+
+  // Update time remaining every second and recalculate on config change
+  const [, setUpdateTrigger] = useState(0);
+  useEffect(() => {
+    if (currentStrategy && currentStrategy.currentPosition && currentStrategy.currentPosition.type !== 'NONE') {
+      const interval = setInterval(() => {
+        setUpdateTrigger(prev => prev + 1);
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [currentStrategy]);
+
+  // Recalculate trade levels (will update when localConfigCache changes)
+  const { tpPrice, slPrice, timeRemaining, timeElapsed, positionType, unrealizedPnL, unrealizedPnLPercent } = getTradeLevels();
 
   // Auto-activate relevant curves when strategy changes
   useEffect(() => {
@@ -67,12 +162,6 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       setShowEMA26(true);
       setShowEMA50(true);
       setShowEMA200(true);
-    } else if (selectedStrategy === 'Neural Scalper') {
-      // Show EMA12, EMA26 (velocity/acceleration), EMA50 (VWAP proxy)
-      setShowEMA12(true);
-      setShowEMA26(true);
-      setShowEMA50(true);
-      setShowEMA200(false);
     } else if (selectedStrategy === 'Bollinger Bounce') {
       // Show EMA12 (upper band), EMA26 (middle band), EMA50 (lower band) for Bollinger Bounce
       setShowEMA12(true);
@@ -118,15 +207,11 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
   };
 
   // Prepare signals for chart display
-  const prepareSignalsForChart = (): Array<{
-    timestamp: number;
-    candleIndex: number;
-    price: number;
-    type: string;
-    strategy: string;
-    reason: string;
-  }> => {
-    if (!strategyPerformances || strategyPerformances.length === 0) return [];
+  // Prepare signals for chart display (optimized for real-time performance)
+  const prepareSignalsForChart = useMemo(() => {
+    if (!strategyPerformances || strategyPerformances.length === 0) {
+      return [];
+    }
     
     const allSignals: Array<{
       timestamp: number;
@@ -134,56 +219,82 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       price: number;
       type: string;
       strategy: string;
-      reason: string;
     }> = [];
     
+    const seenSignals = new Set<string>();
+    
     strategyPerformances.forEach((perf) => {
-      // If a specific strategy is selected, only show signals from that strategy
+      // Filter by selected strategy
       if (selectedStrategy !== 'GLOBAL' && perf.strategyName !== selectedStrategy) {
         return;
       }
       
+      console.log(`📊 ${perf.strategyName} signalHistory:`, perf.signalHistory?.length || 0);
+      
       if (perf.signalHistory && perf.signalHistory.length > 0) {
-        // Limit to last 50 signals to prevent visual clutter
-        const recentSignals = perf.signalHistory.slice(-50);
+        // Show last 30 signals (should cover ~2-3 hours of trading)
+        const recentSignals = perf.signalHistory
+          .sort((a, b) => b.timestamp - a.timestamp) // Most recent first
+          .slice(0, 30); // Keep only last 30 signals
+        
+        console.log(`  → Showing ${recentSignals.length} recent signals from total ${perf.signalHistory.length}`);
+        
+        // Debug: log signal types
+        const signalTypes = recentSignals.map(s => s.type);
+        console.log(`  → Signal types:`, signalTypes);
         
         recentSignals.forEach((signal) => {
-          // Find the closest candle for this signal
-          const signalTime = signal.timestamp;
-          const closestCandleIndex = state.candles.findIndex(candle => 
-            Math.abs(candle.time - signalTime) < 60000 // Within 1 minute
-          );
+          console.log(`  🔍 Processing signal:`, { type: signal.type, price: signal.price, timestamp: signal.timestamp });
           
-          if (closestCandleIndex !== -1) {
+          // Validate signal price
+          if (!signal.price || signal.price <= 0 || signal.price > 200000) {
+            console.log(`  ⚠️ Invalid signal price:`, signal.type, signal.price);
+            return;
+          }
+          
+          const signalKey = `${signal.type}-${signal.price}-${signal.timestamp}`;
+          if (seenSignals.has(signalKey)) return;
+          seenSignals.add(signalKey);
+          
+          // Find closest candle by time difference (more flexible approach)
+          let closestIndex = -1;
+          let minTimeDiff = Infinity;
+          
+          state.candles.forEach((candle, index) => {
+            const timeDiff = Math.abs(candle.time - signal.timestamp);
+            if (timeDiff < minTimeDiff) {
+              minTimeDiff = timeDiff;
+              closestIndex = index;
+            }
+          });
+          
+          // Only add signal if we found a reasonable match (within 30 minutes)
+          if (closestIndex !== -1 && minTimeDiff < 1800000) { // 30 minutes max
+            console.log(`  ✅ Adding ${signal.type} signal @ ${signal.price} to candle ${closestIndex} (time diff: ${Math.round(minTimeDiff / 60000)}min)`);
             allSignals.push({
-              timestamp: signalTime,
-              candleIndex: closestCandleIndex,
+              timestamp: signal.timestamp,
+              candleIndex: closestIndex,
               type: signal.type,
               price: signal.price,
-              strategy: perf.strategyName,
-              reason: signal.reason
+              strategy: perf.strategyName
             });
+          } else {
+            console.log(`  ❌ No suitable candle found for ${signal.type} signal @ ${signal.price} (time diff: ${Math.round(minTimeDiff / 60000)}min)`);
           }
         });
       }
     });
     
+    console.log('📍 Signals Debug:', {
+      totalPerformances: strategyPerformances?.length || 0,
+      selectedStrategy,
+      signalsFound: allSignals.length,
+      signalTypes: allSignals.map(s => s.type),
+      allSignals: allSignals.map(s => ({ type: s.type, price: s.price, strategy: s.strategy }))
+    });
+    
     return allSignals;
-  };
-
-  const tradingSignals = prepareSignalsForChart();
-  
-  // Debug: Log signals and chart data
-  console.log(`📍 Chart Debug:`);
-  console.log(`   Total signals prepared: ${tradingSignals.length}`);
-  console.log(`   BUY: ${tradingSignals.filter(s => s.type === 'BUY').length}`);
-  console.log(`   SELL: ${tradingSignals.filter(s => s.type === 'SELL').length}`);
-  console.log(`   CLOSE_LONG: ${tradingSignals.filter(s => s.type === 'CLOSE_LONG').length}`);
-  console.log(`   CLOSE_SHORT: ${tradingSignals.filter(s => s.type === 'CLOSE_SHORT').length}`);
-  console.log(`   Strategy performances:`, strategyPerformances.map(p => ({
-    name: p.strategyName,
-    signals: p.signalHistory?.length || 0
-  })));
+  }, [strategyPerformances, selectedStrategy, state.candles]);
 
   // Reduce data density for better readability
   const getDataReductionFactor = () => {
@@ -202,20 +313,30 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       originalIndex % reductionFactor === 0 || originalIndex === state.candles.length - 1
     );
 
-  // Calculate price range for signal offset
-  const avgPrice = state.candles.reduce((sum, c) => sum + c.close, 0) / state.candles.length;
-  const signalOffset = avgPrice * 0.0015; // 0.15% of average price for signal offset
 
-  // Prepare chart data with calculated EMAs
-  const chartData = filteredCandlesWithIndex.map(({ candle, originalIndex }) => {
-    // Separate entry and exit signals - use original index for signal matching
-    const buySignalsForCandle = tradingSignals.filter(s => s.candleIndex === originalIndex && s.type === 'BUY');
-    const sellSignalsForCandle = tradingSignals.filter(s => s.candleIndex === originalIndex && s.type === 'SELL');
-    const closeLongSignalsForCandle = tradingSignals.filter(s => s.candleIndex === originalIndex && s.type === 'CLOSE_LONG');
-    const closeShortSignalsForCandle = tradingSignals.filter(s => s.candleIndex === originalIndex && s.type === 'CLOSE_SHORT');
+  // Pre-index signals by candle for O(1) lookup
+  const signalsByCandle = useMemo(() => {
+    const map = new Map<number, Array<{ type: string; price: number }>>();
+    prepareSignalsForChart.forEach((signal: any) => {
+      if (!map.has(signal.candleIndex)) {
+        map.set(signal.candleIndex, []);
+      }
+      map.get(signal.candleIndex)!.push({ type: signal.type, price: signal.price });
+    });
     
-    // Add vertical offset for multiple signals on same candle
-    const totalSignals = buySignalsForCandle.length + sellSignalsForCandle.length + closeLongSignalsForCandle.length + closeShortSignalsForCandle.length;
+    console.log(`📊 Signals indexed by candle:`, {
+      totalSignals: prepareSignalsForChart.length,
+      candlesWithSignals: map.size,
+      signalTypes: prepareSignalsForChart.map((s: any) => s.type)
+    });
+    
+    return map;
+  }, [prepareSignalsForChart]);
+
+  // Prepare chart data with calculated EMAs and signals
+  const chartData = filteredCandlesWithIndex.map(({ candle, originalIndex }, dataIndex) => {
+    // Get signals for this candle (O(1) lookup)
+    const candleSignals = signalsByCandle.get(originalIndex) || [];
     
     return {
       time: new Date(candle.time).toLocaleTimeString('fr-FR', { 
@@ -229,49 +350,30 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       low: candle.low,
       close: candle.close,
       volume: candle.volume,
-      ema12: showEMA12 ? calculateEMA(state.candles, 12, originalIndex) : null,
-      ema26: showEMA26 ? calculateEMA(state.candles, 26, originalIndex) : null,
-      ema50: showEMA50 ? calculateEMA(state.candles, 50, originalIndex) : null,
-      ema200: showEMA200 ? calculateEMA(state.candles, 200, originalIndex) : null,
-      // For Scatter plot: use price if there's a signal, null otherwise
-      // Position signals with dynamic offset based on price
-      buySignalPrice: buySignalsForCandle.length > 0 ? buySignalsForCandle[0].price : null,
-      sellSignalPrice: sellSignalsForCandle.length > 0 ? sellSignalsForCandle[0].price : null,
-      closeLongSignalPrice: closeLongSignalsForCandle.length > 0 ? closeLongSignalsForCandle[0].price : null,
-      closeShortSignalPrice: closeShortSignalsForCandle.length > 0 ? closeShortSignalsForCandle[0].price : null,
-      // Keep arrays for tooltip
-      buySignals: buySignalsForCandle.map(s => ({
-        price: s.price,
-        strategy: { name: s.strategy, type: s.type },
-        reason: s.reason
-      })),
-      sellSignals: sellSignalsForCandle.map(s => ({
-        price: s.price,
-        strategy: { name: s.strategy, type: s.type },
-        reason: s.reason
-      })),
-      closeLongSignals: closeLongSignalsForCandle.map(s => ({
-        price: s.price,
-        strategy: { name: s.strategy, type: 'EXIT' },
-        reason: s.reason
-      })),
-      closeShortSignals: closeShortSignalsForCandle.map(s => ({
-        price: s.price,
-        strategy: { name: s.strategy, type: 'EXIT' },
-        reason: s.reason
-      }))
+      ema12: showEMA12 && originalIndex >= 11 ? calculateEMA(state.candles, 12, originalIndex) : null,
+      ema26: showEMA26 && originalIndex >= 25 ? calculateEMA(state.candles, 26, originalIndex) : null,
+      ema50: showEMA50 && originalIndex >= 49 ? calculateEMA(state.candles, 50, originalIndex) : null,
+      ema200: showEMA200 && originalIndex >= 199 ? calculateEMA(state.candles, 200, originalIndex) : null,
+      // Signal markers - separate by type for different colors
+      buySignal: candleSignals.find(s => s.type === 'BUY')?.price || null,
+      sellSignal: candleSignals.find(s => s.type === 'SELL')?.price || null,
+      closeLongSignal: candleSignals.find(s => s.type === 'CLOSE_LONG')?.price || null,
+      closeShortSignal: candleSignals.find(s => s.type === 'CLOSE_SHORT')?.price || null
     };
   });
 
-  // Debug: Check if signals are in chartData
-  const chartDataWithSignals = chartData.filter(d => 
-    d.buySignalPrice !== null || d.sellSignalPrice !== null || 
-    d.closeLongSignalPrice !== null || d.closeShortSignalPrice !== null
-  );
-  console.log(`   Chart data points with signals: ${chartDataWithSignals.length}`);
-  if (chartDataWithSignals.length > 0) {
-    console.log(`   First signal in chart:`, chartDataWithSignals[0]);
-  }
+  // Debug: Log chart data with signals
+  const buySignalsInChart = chartData.filter(d => d.buySignal !== null).length;
+  const sellSignalsInChart = chartData.filter(d => d.sellSignal !== null).length;
+  const closeLongSignalsInChart = chartData.filter(d => d.closeLongSignal !== null).length;
+  const closeShortSignalsInChart = chartData.filter(d => d.closeShortSignal !== null).length;
+  
+  console.log(`📈 Chart data signals:`, {
+    buySignals: buySignalsInChart,
+    sellSignals: sellSignalsInChart,
+    closeLongSignals: closeLongSignalsInChart,
+    closeShortSignals: closeShortSignalsInChart
+  });
 
   // Calculate price range for better scaling
   const prices = chartData.map(d => d.price);
@@ -335,45 +437,38 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               </p>
             )}
             
-            {/* Trading Signals */}
-            {data?.buySignals && data.buySignals.length > 0 && (
+            {/* Trading Signals - Simplified display */}
+            {data && ((data as any).buySignal !== null || (data as any).sellSignal !== null || (data as any).closeLongSignal !== null || (data as any).closeShortSignal !== null) && (
               <div className="mt-2 pt-2 border-t border-gray-600">
-                <p className="text-green-400 font-semibold mb-1">📈 BUY Signals:</p>
-                {data.buySignals.map((signal: { price: number; strategy: { name: string; type: string }; reason: string }, idx: number) => (
-                  <div key={idx} className="text-xs text-green-300">
-                    {signal.strategy.name}: ${signal.price.toFixed(2)} - {signal.reason}
+                <p className="text-gray-300 font-semibold mb-2 text-xs">📊 Signals</p>
+                {(data as any).buySignal !== null && (data as any).buySignal !== undefined && (
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-3 h-3 rounded-full bg-green-500" />
+                    <span className="text-xs font-medium text-green-400">LONG</span>
+                    <span className="text-xs text-gray-400">@ ${(data as any).buySignal.toFixed(2)}</span>
                   </div>
-                ))}
+                )}
+                {(data as any).sellSignal !== null && (data as any).sellSignal !== undefined && (
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-3 h-3 rounded-full bg-red-500" />
+                    <span className="text-xs font-medium text-red-400">SHORT</span>
+                    <span className="text-xs text-gray-400">@ ${(data as any).sellSignal.toFixed(2)}</span>
               </div>
             )}
-            {data?.sellSignals && data.sellSignals.length > 0 && (
-              <div className="mt-2 pt-2 border-t border-gray-600">
-                <p className="text-red-400 font-semibold mb-1">📉 SELL Signals:</p>
-                {data.sellSignals.map((signal: { price: number; strategy: { name: string; type: string }; reason: string }, idx: number) => (
-                  <div key={idx} className="text-xs text-red-300">
-                    {signal.strategy.name}: ${signal.price.toFixed(2)} - {signal.reason}
-                  </div>
-                ))}
+                {(data as any).closeLongSignal !== null && (data as any).closeLongSignal !== undefined && (
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-3 h-3 rounded-full bg-blue-500" />
+                    <span className="text-xs font-medium text-blue-400">EXIT LONG</span>
+                    <span className="text-xs text-gray-400">@ ${(data as any).closeLongSignal.toFixed(2)}</span>
               </div>
             )}
-            {data?.closeLongSignals && data.closeLongSignals.length > 0 && (
-              <div className="mt-2 pt-2 border-t border-gray-600">
-                <p className="text-orange-400 font-semibold mb-1">🔶 EXIT LONG:</p>
-                {data.closeLongSignals.map((signal: { price: number; strategy: { name: string; type: string }; reason: string }, idx: number) => (
-                  <div key={idx} className="text-xs text-orange-300">
-                    {signal.strategy.name}: ${signal.price.toFixed(2)} - {signal.reason}
-                  </div>
-                ))}
+                {(data as any).closeShortSignal !== null && (data as any).closeShortSignal !== undefined && (
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-3 h-3 rounded-full bg-orange-500" />
+                    <span className="text-xs font-medium text-orange-400">EXIT SHORT</span>
+                    <span className="text-xs text-gray-400">@ ${(data as any).closeShortSignal.toFixed(2)}</span>
               </div>
             )}
-            {data?.closeShortSignals && data.closeShortSignals.length > 0 && (
-              <div className="mt-2 pt-2 border-t border-gray-600">
-                <p className="text-cyan-400 font-semibold mb-1">🔷 EXIT SHORT:</p>
-                {data.closeShortSignals.map((signal: { price: number; strategy: { name: string; type: string }; reason: string }, idx: number) => (
-                  <div key={idx} className="text-xs text-cyan-300">
-                    {signal.strategy.name}: ${signal.price.toFixed(2)} - {signal.reason}
-                  </div>
-                ))}
               </div>
             )}
           </div>
@@ -389,14 +484,100 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       {isFullscreen && (
         <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
           {/* Fullscreen Header */}
-          <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
+          <div className="bg-gray-800 border-b border-gray-700">
+            {/* Info Bar - Price, Strategy, Position, Timer */}
+            <div className="px-4 py-3 flex items-center gap-6">
+              {/* BTC Price */}
+              <div className="flex items-center gap-2">
+                <span className="text-white font-bold text-xl">${currentPrice.toFixed(2)}</span>
+                <span className="text-gray-400 text-sm">BTC/USDT</span>
+              </div>
+
+              {/* Strategy Name */}
+              {selectedStrategy !== 'GLOBAL' && (
+                <>
+                  <div className={`w-1 h-7 ${strategyColors.accent} rounded-full`}></div>
+                  <span className={`${strategyColors.text} text-base font-semibold`}>
+                    {selectedStrategy}
+                  </span>
+                </>
+              )}
+
+              {/* Position, Timer, TP, SL, Unrealized */}
+              {positionType && positionType !== 'NONE' && (
+                <>
+                  <div className="w-px h-6 bg-gray-600"></div>
+                  <div className="flex items-center justify-between flex-1">
             <div className="flex items-center gap-4">
-              <h3 className="text-white font-semibold text-lg" title="BTC/USDT: Paire de trading Bitcoin contre Tether (USD)">BTC/USDT</h3>
-              
+                      {/* Position Type */}
+                      <span className={`text-base font-bold ${
+                        positionType === 'LONG' ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {positionType}
+                      </span>
+                      
+                      {/* Separator */}
+                      {timeElapsed && <div className="w-px h-5 bg-gray-600"></div>}
+                      
+                      {/* Time Elapsed & Remaining */}
+                      {timeElapsed && (
+                        <div className="flex items-center gap-1 text-sm font-mono font-semibold text-blue-400">
+                          <HiClock className="w-4 h-4" />
+                          <span>{timeElapsed}</span>
+                        </div>
+                      )}
+                      
+                      {/* Separator */}
+                      {timeRemaining && <div className="w-px h-5 bg-gray-600"></div>}
+                      
+                      {timeRemaining && (
+                        <div className="flex items-center gap-1 text-sm font-mono font-semibold text-red-400">
+                          <HiClock className="w-4 h-4" />
+                          <span>{timeRemaining}</span>
+                        </div>
+                      )}
+                      
+                      {/* Separator */}
+                      {tpPrice && <div className="w-px h-5 bg-gray-600"></div>}
+                      
+                      {/* TP */}
+                      {tpPrice && (
+                        <span className="text-sm font-semibold text-green-400">
+                          TP: ${tpPrice.toFixed(2)}
+                        </span>
+                      )}
+                      
+                      {/* SL */}
+                      {slPrice && (
+                        <span className="text-sm font-semibold text-red-400">
+                          SL: ${slPrice.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* Unrealized P&L - Au bout à droite */}
+                    {unrealizedPnL !== undefined && (
+                      <>
+                        <span className={`text-sm font-semibold ${
+                          unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          {unrealizedPnL >= 0 ? '+' : ''}{unrealizedPnL.toFixed(2)} USDT
+                        </span>
+                        <div className={`w-1 h-7 ${strategyColors.accent} rounded-full`}></div>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* EMA Controls & Values Bar */}
+            <div className="px-4 py-2 bg-gray-900/50 border-t border-gray-700/50 flex items-center justify-between">
+              {/* EMA Toggle Buttons */}
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowEMA12(!showEMA12)}
-                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                     showEMA12 ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide utilisé par Momentum Crossover"
@@ -405,7 +586,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 </button>
                 <button
                   onClick={() => setShowEMA26(!showEMA26)}
-                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                     showEMA26 ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen utilisé par Momentum Crossover"
@@ -414,7 +595,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 </button>
                 <button
                   onClick={() => setShowEMA50(!showEMA50)}
-                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                     showEMA50 ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme utilisé par le bot"
@@ -423,7 +604,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 </button>
                 <button
                   onClick={() => setShowEMA200(!showEMA200)}
-                  className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                     showEMA200 ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Indicateur de tendance long terme utilisé par le bot"
@@ -432,52 +613,44 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 </button>
               </div>
 
-              {/* Strategy Name Badge */}
-              {selectedStrategy !== 'GLOBAL' && (
-                <div className={`px-3 py-1.5 border-2 ${strategyColors.border} ${strategyColors.text} text-sm rounded-md font-semibold`} title={`Stratégie sélectionnée: ${selectedStrategy}`}>
-                   {selectedStrategy}
-                </div>
-              )}
-            </div>
-            
-            <div className="flex items-center gap-4">
               {/* EMA Values */}
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-6">
                 {showEMA12 && chartData.length > 0 && chartData[chartData.length - 1].ema12 && (
-                  <div className="flex items-center gap-1.5" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Utilisée par Momentum Crossover pour détecter les croisements rapides">
+                  <div className="flex items-center gap-2" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Utilisée par Momentum Crossover pour détecter les croisements rapides">
                     <div className="w-3 h-0.5 bg-green-400"></div>
-                    <span className="text-green-400 font-mono text-base font-semibold">EMA(12): {chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
+                    <span className="text-green-400 font-mono text-sm font-semibold">{chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
                   </div>
                 )}
                 {showEMA26 && chartData.length > 0 && chartData[chartData.length - 1].ema26 && (
-                  <div className="flex items-center gap-1.5" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Utilisée par Momentum Crossover pour détecter les croisements moyens">
+                  <div className="flex items-center gap-2" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Utilisée par Momentum Crossover pour détecter les croisements moyens">
                     <div className="w-3 h-0.5 bg-orange-400"></div>
-                    <span className="text-orange-400 font-mono text-base font-semibold">EMA(26): {chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
+                    <span className="text-orange-400 font-mono text-sm font-semibold">{chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
                   </div>
                 )}
                 {showEMA50 && chartData.length > 0 && chartData[chartData.length - 1].ema50 && (
-                  <div className="flex items-center gap-1.5" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Utilisée par le bot pour détecter les tendances">
+                  <div className="flex items-center gap-2" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Utilisée par le bot pour détecter les tendances">
                     <div className="w-3 h-0.5 bg-blue-400"></div>
-                    <span className="text-blue-400 font-mono text-base font-semibold">EMA(50): {chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
+                    <span className="text-blue-400 font-mono text-sm font-semibold">{chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
                   </div>
                 )}
                 {showEMA200 && chartData.length > 0 && chartData[chartData.length - 1].ema200 && (
-                  <div className="flex items-center gap-1.5" title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Utilisée par le bot pour confirmer la tendance majeure">
+                  <div className="flex items-center gap-2" title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Utilisée par le bot pour confirmer la tendance majeure">
                     <div className="w-3 h-0.5 bg-purple-400"></div>
-                    <span className="text-purple-400 font-mono text-base font-semibold">EMA(200): {chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
+                    <span className="text-purple-400 font-mono text-sm font-semibold">{chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
                   </div>
                 )}
-              </div>
-              
               
               {/* Close Fullscreen Button */}
               <button
                 onClick={() => setIsFullscreen(false)}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium transition-colors"
+                  className="ml-2 p-1.5 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
                 title="Quitter le plein écran"
               >
-                ✕ Fermer
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
               </button>
+              </div>
             </div>
           </div>
           
@@ -513,6 +686,40 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                     fontWeight: 'bold'
                   }}
                 />
+
+                {/* Take Profit Line - Ligne verte */}
+                {tpPrice && (
+                  <ReferenceLine 
+                    y={tpPrice} 
+                    stroke="#22C55E" 
+                    strokeDasharray="3 3" 
+                    strokeWidth={2}
+                    label={{ 
+                      value: `TP: ${tpPrice.toFixed(2)}`, 
+                      position: 'right',
+                      fill: '#22C55E',
+                      fontSize: 11,
+                      fontWeight: 'bold'
+                    }}
+                  />
+                )}
+
+                {/* Stop Loss Line - Ligne rouge */}
+                {slPrice && (
+                  <ReferenceLine 
+                    y={slPrice} 
+                    stroke="#EF4444" 
+                    strokeDasharray="3 3" 
+                    strokeWidth={2}
+                    label={{ 
+                      value: `SL: ${slPrice.toFixed(2)}`, 
+                      position: 'right',
+                      fill: '#EF4444',
+                      fontSize: 11,
+                      fontWeight: 'bold'
+                    }}
+                  />
+                )}
                 
                 {/* Price Line - Smoothed for better readability */}
                 <Line
@@ -533,7 +740,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                     type="monotone"
                     dataKey="ema12"
                     stroke="#10B981"
-                    strokeWidth={2}
+                    strokeWidth={1.5}
                     dot={false}
                     isAnimationActive={false}
                     connectNulls={false}
@@ -546,7 +753,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                     type="monotone"
                     dataKey="ema26"
                     stroke="#F59E0B"
-                    strokeWidth={2}
+                    strokeWidth={1.5}
                     dot={false}
                     isAnimationActive={false}
                     connectNulls={false}
@@ -559,7 +766,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                     type="monotone"
                     dataKey="ema50"
                     stroke="#3B82F6"
-                    strokeWidth={2}
+                    strokeWidth={1.5}
                     dot={false}
                     isAnimationActive={false}
                     connectNulls={false}
@@ -572,7 +779,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                     type="monotone"
                     dataKey="ema200"
                     stroke="#A855F7"
-                    strokeWidth={2}
+                    strokeWidth={1.5}
                     dot={false}
                     isAnimationActive={false}
                     connectNulls={false}
@@ -581,47 +788,65 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   />
                 )}
                 
-                {/* Trading Signals - Entry */}
+                {/* Trading Signals - Color-coded by type */}
+                {/* BUY signals - Green */}
                 <Scatter
-                  dataKey="buySignalPrice"
+                  dataKey="buySignal"
                   fill="#10B981"
-                  line={false}
-                  shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                    const { cx, cy, payload } = props;
-                    if (cx === undefined || cy === undefined || !payload?.buySignals?.length) return <g />;
-                    return <circle cx={cx} cy={cy} r={4} fill="#10B981" opacity={0.9} />;
+                  shape={(props: any) => {
+                    const { cx, cy } = props;
+                    if (!cx || !cy) return <g />;
+                    return (
+                      <g>
+                        <circle cx={cx} cy={cy} r={4} fill="#10B981" opacity={0.9} />
+                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
+                      </g>
+                    );
                   }}
                 />
+                {/* SELL signals - Red */}
                 <Scatter
-                  dataKey="sellSignalPrice"
+                  dataKey="sellSignal"
                   fill="#EF4444"
-                  line={false}
-                  shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                    const { cx, cy, payload } = props;
-                    if (cx === undefined || cy === undefined || !payload?.sellSignals?.length) return <g />;
-                    return <circle cx={cx} cy={cy} r={4} fill="#EF4444" opacity={0.9} />;
+                  shape={(props: any) => {
+                    const { cx, cy } = props;
+                    if (!cx || !cy) return <g />;
+                    return (
+                      <g>
+                        <circle cx={cx} cy={cy} r={4} fill="#EF4444" opacity={0.9} />
+                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
+                      </g>
+                    );
                   }}
                 />
-                
-                {/* Trading Signals - Exit (Stop Loss / Take Profit) */}
+                {/* CLOSE_LONG signals - Blue */}
                 <Scatter
-                  dataKey="closeLongSignalPrice"
+                  dataKey="closeLongSignal"
+                  fill="#3B82F6"
+                  shape={(props: any) => {
+                    const { cx, cy } = props;
+                    if (!cx || !cy) return <g />;
+                    return (
+                      <g>
+                        <circle cx={cx} cy={cy} r={4} fill="#3B82F6" opacity={0.9} />
+                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
+                      </g>
+                    );
+                  }}
+                />
+                {/* CLOSE_SHORT signals - Orange */}
+                <Scatter
+                  dataKey="closeShortSignal"
                   fill="#F59E0B"
-                  line={false}
-                  shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                    const { cx, cy, payload } = props;
-                    if (cx === undefined || cy === undefined || !payload?.closeLongSignals?.length) return <g />;
-                    return <circle cx={cx} cy={cy} r={4} fill="#F59E0B" opacity={0.9} />;
-                  }}
-                />
-                <Scatter
-                  dataKey="closeShortSignalPrice"
-                  fill="#06B6D4"
-                  line={false}
-                  shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                    const { cx, cy, payload } = props;
-                    if (cx === undefined || cy === undefined || !payload?.closeShortSignals?.length) return <g />;
-                    return <circle cx={cx} cy={cy} r={4} fill="#06B6D4" opacity={0.9} />;
+                  shape={(props: any) => {
+                    const { cx, cy } = props;
+                    if (!cx || !cy) return <g />;
+                    return (
+                      <g>
+                        <circle cx={cx} cy={cy} r={4} fill="#F59E0B" opacity={0.9} />
+                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
+                      </g>
+                    );
                   }}
                 />
               </ComposedChart>
@@ -631,17 +856,102 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       )}
       
       {/* Normal Chart */}
-      <div className="bg-gray-900 h-[28rem]">
+      <div className="bg-gray-900 h-[28rem] relative">
         {/* Chart Controls */}
-        <div className="bg-gray-800 border-b border-gray-700 px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h3 className="text-white font-semibold" title="BTC/USDT: Paire de trading Bitcoin contre Tether (USD)">BTC/USDT</h3>
-            
-            {/* Chart Toggle Controls */}
+        <div className="bg-gray-800 border-b border-gray-700">
+          {/* Info Bar - Price, Strategy, Position, Timer */}
+          <div className="px-4 py-2 flex items-center gap-4">
+            {/* BTC Price */}
+            <div className="flex items-center gap-2">
+              <span className="text-white font-bold text-base">${currentPrice.toFixed(2)}</span>
+              <span className="text-gray-400 text-xs">BTC/USDT</span>
+            </div>
+
+            {/* Strategy Name */}
+            {selectedStrategy !== 'GLOBAL' && (
+              <>
+                <div className={`w-1 h-6 ${strategyColors.accent} rounded-full`}></div>
+                <span className={`${strategyColors.text} text-sm font-semibold`}>
+                  {selectedStrategy}
+                </span>
+              </>
+            )}
+
+            {/* Position, Timer, TP, SL, Unrealized */}
+            {positionType && positionType !== 'NONE' && (
+              <>
+                <div className="w-px h-5 bg-gray-600"></div>
+                <div className="flex items-center justify-between flex-1">
+                  <div className="flex items-center gap-3">
+                    {/* Position Type */}
+                    <span className={`text-sm font-bold ${
+                      positionType === 'LONG' ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {positionType}
+                    </span>
+                    
+                    {/* Separator */}
+                    {timeElapsed && <div className="w-px h-4 bg-gray-600"></div>}
+                    
+                    {/* Time Elapsed & Remaining */}
+                    {timeElapsed && (
+                      <div className="flex items-center gap-1 text-xs font-mono font-semibold text-blue-400">
+                        <HiClock className="w-3.5 h-3.5" />
+                        <span>{timeElapsed}</span>
+                      </div>
+                    )}
+                    
+                    {/* Separator */}
+                    {timeRemaining && <div className="w-px h-4 bg-gray-600"></div>}
+                    
+                    {timeRemaining && (
+                      <div className="flex items-center gap-1 text-xs font-mono font-semibold text-red-400">
+                        <HiClock className="w-3.5 h-3.5" />
+                        <span>{timeRemaining}</span>
+                      </div>
+                    )}
+                    
+                    {/* Separator */}
+                    {tpPrice && <div className="w-px h-4 bg-gray-600"></div>}
+                    
+                    {/* TP */}
+                    {tpPrice && (
+                      <span className="text-xs font-semibold text-green-400">
+                        TP: ${tpPrice.toFixed(2)}
+                      </span>
+                    )}
+                    
+                    {/* SL */}
+                    {slPrice && (
+                      <span className="text-xs font-semibold text-red-400">
+                        SL: ${slPrice.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* Unrealized P&L - Au bout à droite */}
+                  {unrealizedPnL !== undefined && (
+                    <>
+                      <span className={`text-xs font-semibold ${
+                        unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {unrealizedPnL >= 0 ? '+' : ''}{unrealizedPnL.toFixed(2)} USDT
+                      </span>
+                      <div className={`w-1 h-6 ${strategyColors.accent} rounded-full`}></div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* EMA Controls & Values Bar */}
+          <div className="px-4 py-2 bg-gray-900/50 border-t border-gray-700/50 flex items-center justify-between">
+            {/* EMA Toggle Buttons */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowEMA12(!showEMA12)}
-                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                   showEMA12 ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide utilisé par Momentum Crossover"
@@ -650,7 +960,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               </button>
               <button
                 onClick={() => setShowEMA26(!showEMA26)}
-                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                   showEMA26 ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen utilisé par Momentum Crossover"
@@ -659,7 +969,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               </button>
               <button
                 onClick={() => setShowEMA50(!showEMA50)}
-                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                   showEMA50 ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme utilisé par le bot"
@@ -668,7 +978,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               </button>
               <button
                 onClick={() => setShowEMA200(!showEMA200)}
-                className={`px-3 py-1 rounded-md text-sm font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                   showEMA200 ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Indicateur de tendance long terme utilisé par le bot"
@@ -677,51 +987,44 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               </button>
             </div>
 
-            {/* Strategy Name Badge */}
-            {selectedStrategy !== 'GLOBAL' && (
-              <div className={`px-3 py-1 border-2 ${strategyColors.border} ${strategyColors.text} text-sm rounded-md font-semibold`} title={`Stratégie sélectionnée: ${selectedStrategy}`}>
-                 {selectedStrategy}
-
-              </div>
-            )}
-          </div>
-        
-        {/* EMA Values - moved to the right */}
+            {/* EMA Values */}
         <div className="flex items-center gap-4">
           {showEMA12 && chartData.length > 0 && chartData[chartData.length - 1].ema12 && (
             <div className="flex items-center gap-1.5" title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Utilisée par Momentum Crossover pour détecter les croisements rapides">
               <div className="w-3 h-0.5 bg-green-400"></div>
-              <span className="text-green-400 font-mono text-base font-semibold">EMA(12): {chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
+                  <span className="text-green-400 font-mono text-xs font-semibold">{chartData[chartData.length - 1].ema12?.toFixed(2)}</span>
             </div>
           )}
           {showEMA26 && chartData.length > 0 && chartData[chartData.length - 1].ema26 && (
             <div className="flex items-center gap-1.5" title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Utilisée par Momentum Crossover pour détecter les croisements moyens">
               <div className="w-3 h-0.5 bg-orange-400"></div>
-              <span className="text-orange-400 font-mono text-base font-semibold">EMA(26): {chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
+                  <span className="text-orange-400 font-mono text-xs font-semibold">{chartData[chartData.length - 1].ema26?.toFixed(2)}</span>
             </div>
           )}
           {showEMA50 && chartData.length > 0 && chartData[chartData.length - 1].ema50 && (
             <div className="flex items-center gap-1.5" title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Utilisée par le bot pour détecter les tendances">
               <div className="w-3 h-0.5 bg-blue-400"></div>
-              <span className="text-blue-400 font-mono text-base font-semibold">EMA(50): {chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
+                  <span className="text-blue-400 font-mono text-xs font-semibold">{chartData[chartData.length - 1].ema50?.toFixed(2)}</span>
             </div>
           )}
           {showEMA200 && chartData.length > 0 && chartData[chartData.length - 1].ema200 && (
             <div className="flex items-center gap-1.5" title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Utilisée par le bot pour confirmer la tendance majeure">
               <div className="w-3 h-0.5 bg-purple-400"></div>
-              <span className="text-purple-400 font-mono text-base font-semibold">EMA(200): {chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
+                  <span className="text-purple-400 font-mono text-xs font-semibold">{chartData[chartData.length - 1].ema200?.toFixed(2)}</span>
             </div>
           )}
-          
           
           {/* Fullscreen Button */}
           <button
             onClick={() => setIsFullscreen(true)}
-            className="ml-2 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium transition-colors"
+                className="ml-2 p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded transition-colors"
             title="Afficher en plein écran"
           >
-            ⛶ Plein écran
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                </svg>
           </button>
+            </div>
         </div>
       </div>
 
@@ -760,6 +1063,40 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 fontWeight: 'bold'
               }}
             />
+
+            {/* Take Profit Line - Ligne verte */}
+            {tpPrice && (
+              <ReferenceLine 
+                y={tpPrice} 
+                stroke="#22C55E" 
+                strokeDasharray="3 3" 
+                strokeWidth={2}
+                label={{ 
+                  value: `TP: ${tpPrice.toFixed(2)}`, 
+                  position: 'right',
+                  fill: '#22C55E',
+                  fontSize: 11,
+                  fontWeight: 'bold'
+                }}
+              />
+            )}
+
+            {/* Stop Loss Line - Ligne rouge */}
+            {slPrice && (
+              <ReferenceLine 
+                y={slPrice} 
+                stroke="#EF4444" 
+                strokeDasharray="3 3" 
+                strokeWidth={2}
+                label={{ 
+                  value: `SL: ${slPrice.toFixed(2)}`, 
+                  position: 'right',
+                  fill: '#EF4444',
+                  fontSize: 11,
+                  fontWeight: 'bold'
+                }}
+              />
+            )}
             
             {/* Price Line - Smoothed for better readability */}
             <Line
@@ -780,7 +1117,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 type="monotone"
                 dataKey="ema12"
                 stroke="#10B981"
-                strokeWidth={1.5}
+                strokeWidth={1}
                 dot={false}
                 isAnimationActive={false}
                 connectNulls={false}
@@ -791,7 +1128,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 type="monotone"
                 dataKey="ema26"
                 stroke="#F59E0B"
-                strokeWidth={1.5}
+                strokeWidth={1}
                 dot={false}
                 isAnimationActive={false}
                 connectNulls={false}
@@ -802,7 +1139,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 type="monotone"
                 dataKey="ema50"
                 stroke="#3B82F6"
-                strokeWidth={1.5}
+                strokeWidth={1}
                 dot={false}
                 isAnimationActive={false}
                 connectNulls={false}
@@ -813,54 +1150,72 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                 type="monotone"
                 dataKey="ema200"
                 stroke="#A855F7"
-                strokeWidth={1.5}
+                strokeWidth={1}
                 dot={false}
                 isAnimationActive={false}
                 connectNulls={false}
               />
             )}
             
-            {/* Trading Signals - Entry */}
+            {/* Trading Signals - Color-coded by type */}
+            {/* BUY signals - Green */}
             <Scatter
-              dataKey="buySignalPrice"
+              dataKey="buySignal"
               fill="#10B981"
-              line={false}
-              shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                const { cx, cy, payload } = props;
-                if (cx === undefined || cy === undefined || !payload?.buySignals?.length) return <g />;
-                return <circle cx={cx} cy={cy} r={4} fill="#10B981" opacity={0.9} />;
+              shape={(props: any) => {
+                const { cx, cy } = props;
+                if (!cx || !cy) return <g />;
+                return (
+                  <g>
+                    <circle cx={cx} cy={cy} r={5} fill="#10B981" opacity={0.9} />
+                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
+                  </g>
+                );
               }}
             />
+            {/* SELL signals - Red */}
             <Scatter
-              dataKey="sellSignalPrice"
+              dataKey="sellSignal"
               fill="#EF4444"
-              line={false}
-              shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                const { cx, cy, payload } = props;
-                if (cx === undefined || cy === undefined || !payload?.sellSignals?.length) return <g />;
-                return <circle cx={cx} cy={cy} r={4} fill="#EF4444" opacity={0.9} />;
+              shape={(props: any) => {
+                const { cx, cy } = props;
+                if (!cx || !cy) return <g />;
+                return (
+                  <g>
+                    <circle cx={cx} cy={cy} r={5} fill="#EF4444" opacity={0.9} />
+                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
+                  </g>
+                );
               }}
             />
-            
-            {/* Trading Signals - Exit (Stop Loss / Take Profit) */}
+            {/* CLOSE_LONG signals - Blue */}
             <Scatter
-              dataKey="closeLongSignalPrice"
+              dataKey="closeLongSignal"
+              fill="#3B82F6"
+              shape={(props: any) => {
+                const { cx, cy } = props;
+                if (!cx || !cy) return <g />;
+                return (
+                  <g>
+                    <circle cx={cx} cy={cy} r={5} fill="#3B82F6" opacity={0.9} />
+                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
+                  </g>
+                );
+              }}
+            />
+            {/* CLOSE_SHORT signals - Orange */}
+            <Scatter
+              dataKey="closeShortSignal"
               fill="#F59E0B"
-              line={false}
-              shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                const { cx, cy, payload } = props;
-                if (cx === undefined || cy === undefined || !payload?.closeLongSignals?.length) return <g />;
-                return <circle cx={cx} cy={cy} r={4} fill="#F59E0B" opacity={0.9} />;
-              }}
-            />
-            <Scatter
-              dataKey="closeShortSignalPrice"
-              fill="#06B6D4"
-              line={false}
-              shape={(props: { cx?: number; cy?: number; payload?: any }) => {
-                const { cx, cy, payload } = props;
-                if (cx === undefined || cy === undefined || !payload?.closeShortSignals?.length) return <g />;
-                return <circle cx={cx} cy={cy} r={4} fill="#06B6D4" opacity={0.9} />;
+              shape={(props: any) => {
+                const { cx, cy } = props;
+                if (!cx || !cy) return <g />;
+                return (
+                  <g>
+                    <circle cx={cx} cy={cy} r={5} fill="#F59E0B" opacity={0.9} />
+                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
+                  </g>
+                );
               }}
             />
           </ComposedChart>

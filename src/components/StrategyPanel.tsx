@@ -1,15 +1,18 @@
 'use client';
 
 import { StrategyPerformance } from '@/types/trading';
-import { useState } from 'react';
-import { HiBookOpen, HiChevronDown, HiChevronRight, HiRefresh, HiViewGrid } from 'react-icons/hi';
+import { useRef, useState } from 'react';
+import { FaBrain } from 'react-icons/fa';
+import { HiBookOpen, HiChevronDown, HiChevronRight, HiClock, HiCog, HiCurrencyDollar, HiLightningBolt, HiRefresh, HiSortAscending, HiTrendingUp, HiViewGrid } from 'react-icons/hi';
 
 interface StrategyPanelProps {
   performances: StrategyPerformance[];
   onToggleStrategy?: (strategyName: string) => void;
   selectedStrategy?: string;
   onSelectStrategy?: (strategyName: string) => void;
-  getCriteriaForStrategy?: (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'NEURAL_SCALPER' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER', strategyMetrics: StrategyPerformance) => { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number; longReady?: boolean; shortReady?: boolean } | null;
+  onRefresh?: () => void;
+  onConfigChange?: (strategyName: string, config: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }) => void;
+  getCriteriaForStrategy?: (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK', strategyMetrics: StrategyPerformance) => { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number; longReady?: boolean; shortReady?: boolean } | null;
   getStatusesArray?: (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short') => string[];
   renderCriteriaLabels?: (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short') => React.ReactNode;
 }
@@ -19,6 +22,8 @@ export default function StrategyPanel({
   onToggleStrategy, 
   selectedStrategy, 
   onSelectStrategy,
+  onRefresh,
+  onConfigChange,
   getCriteriaForStrategy,
   getStatusesArray,
   renderCriteriaLabels
@@ -27,8 +32,33 @@ export default function StrategyPanel({
   const [resetConfirm, setResetConfirm] = useState<string | null>(null); // Strategy name to reset
   const [flippedCards, setFlippedCards] = useState<Set<string>>(new Set()); // Cartes retournées pour afficher les détails
   const [expandedSections, setExpandedSections] = useState<Record<string, Set<string>>>({}); // Sections étendues par stratégie
+  const [sortMode, setSortMode] = useState<'smart' | 'pnl' | 'winrate' | 'capital' | 'alphabetical'>('smart'); // Mode de tri
+  const [settingsOpen, setSettingsOpen] = useState<string | null>(null); // Strategy name in settings mode
+  const [tempSettings, setTempSettings] = useState<{
+    profitTarget: number;
+    stopLoss: number;
+    maxPositionTime: number;
+    enableTP: boolean;
+    enableSL: boolean;
+    enableMaxPos: boolean;
+  }>({ profitTarget: 0, stopLoss: 0, maxPositionTime: 0, enableTP: true, enableSL: true, enableMaxPos: true });
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Cache local des paramètres modifiés (persiste après fermeture de Settings)
+  const [localConfigCache, setLocalConfigCache] = useState<Record<string, { 
+    profitTargetPercent?: number | null; 
+    stopLossPercent?: number | null; 
+    maxPositionTime?: number | null;
+    enableTP?: boolean;
+    enableSL?: boolean;
+    enableMaxPos?: boolean;
+  }>>({});
 
   const toggleCardFlip = (strategyName: string) => {
+    // Fermer Settings si ouvert
+    if (settingsOpen === strategyName) {
+      setSettingsOpen(null);
+    }
+    
     setFlippedCards(prev => {
       const newSet = new Set(prev);
       if (newSet.has(strategyName)) {
@@ -59,6 +89,215 @@ export default function StrategyPanel({
 
   const isSectionExpanded = (strategyName: string, sectionName: string) => {
     return expandedSections[strategyName]?.has(sectionName) || false;
+  };
+
+  // Fonction de tri multi-critères pour les stratégies
+  const sortStrategies = (strategies: StrategyPerformance[]): StrategyPerformance[] => {
+    return [...strategies].sort((a, b) => {
+      switch (sortMode) {
+        case 'pnl':
+          // Tri par P&L uniquement
+          return b.totalPnL - a.totalPnL;
+        
+        case 'winrate':
+          // Tri par Win Rate uniquement
+          return b.winRate - a.winRate;
+        
+        case 'capital':
+          // Tri par Capital actuel uniquement
+          return b.currentCapital - a.currentCapital;
+        
+        case 'alphabetical':
+          // Tri alphabétique
+          return a.strategyName.localeCompare(b.strategyName);
+        
+        case 'smart':
+        default:
+          // TRI INTELLIGENT multi-critères
+          // Critère 1 : Stratégies actives en priorité
+          if (a.isActive !== b.isActive) {
+            return a.isActive ? -1 : 1;
+          }
+
+          // Critère 2 : Win rate (stratégies gagnantes d'abord)
+          // Seulement si au moins 3 trades pour être significatif
+          const aHasSignificantTrades = a.totalTrades >= 3;
+          const bHasSignificantTrades = b.totalTrades >= 3;
+          
+          if (aHasSignificantTrades && bHasSignificantTrades) {
+            const winRateDiff = b.winRate - a.winRate;
+            if (Math.abs(winRateDiff) > 5) { // Différence significative (>5%)
+              return winRateDiff;
+            }
+          }
+
+          // Critère 3 : Total P&L (profit/perte cumulé)
+          const pnlDiff = b.totalPnL - a.totalPnL;
+          if (Math.abs(pnlDiff) > 10) { // Différence significative (>10 USDT)
+            return pnlDiff;
+          }
+
+          // Critère 4 : Capital actuel (performance globale)
+          const capitalDiff = b.currentCapital - a.currentCapital;
+          if (Math.abs(capitalDiff) > 50) { // Différence significative (>50 USDT)
+            return capitalDiff;
+          }
+
+          // Critère 5 : Nombre de trades (expérience)
+          const tradesDiff = b.totalTrades - a.totalTrades;
+          if (tradesDiff !== 0) {
+            return tradesDiff;
+          }
+
+          // Critère 6 : Position ouverte (actives en premier)
+          const aHasPosition = a.currentPosition.type !== 'NONE';
+          const bHasPosition = b.currentPosition.type !== 'NONE';
+          if (aHasPosition !== bHasPosition) {
+            return aHasPosition ? -1 : 1;
+          }
+
+          // Par défaut, ordre alphabétique
+          return a.strategyName.localeCompare(b.strategyName);
+      }
+    });
+  };
+
+  const getSortIcon = () => {
+    switch (sortMode) {
+      case 'pnl': return <HiTrendingUp className="w-4 h-4" />;
+      case 'winrate': return <HiLightningBolt className="w-4 h-4" />;
+      case 'capital': return <HiCurrencyDollar className="w-4 h-4" />;
+      case 'alphabetical': return <HiSortAscending className="w-4 h-4" />;
+      case 'smart': return <FaBrain className="w-4 h-4" />;
+    }
+  };
+
+  const getSortLabel = () => {
+    switch (sortMode) {
+      case 'pnl': return 'P&L Total';
+      case 'winrate': return 'Win Rate';
+      case 'capital': return 'Capital';
+      case 'alphabetical': return 'Alphabétique';
+      case 'smart': return 'Intelligent';
+    }
+  };
+
+  const cycleSortMode = () => {
+    const modes: typeof sortMode[] = ['smart', 'pnl', 'winrate', 'capital', 'alphabetical'];
+    const currentIndex = modes.indexOf(sortMode);
+    const nextIndex = (currentIndex + 1) % modes.length;
+    setSortMode(modes[nextIndex]);
+  };
+
+  const openSettings = (strategyName: string, strategyType: string, strategyConfig?: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }) => {
+    // Fermer le mode Read si ouvert
+    setFlippedCards(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(strategyName);
+      return newSet;
+    });
+    
+    // Utiliser le cache local en priorité, puis la config depuis SSE, puis les defaults
+    const cachedConfig = localConfigCache[strategyName];
+    const mergedConfig = cachedConfig ? { ...strategyConfig, ...cachedConfig } : strategyConfig;
+    const params = getStrategyParams(strategyType, mergedConfig);
+    
+    // Déterminer les états des toggles depuis le cache ou la config
+    const enableTP = cachedConfig?.enableTP !== undefined 
+      ? cachedConfig.enableTP 
+      : (mergedConfig?.profitTargetPercent !== null && mergedConfig?.profitTargetPercent !== undefined);
+    
+    const enableSL = cachedConfig?.enableSL !== undefined 
+      ? cachedConfig.enableSL 
+      : (mergedConfig?.stopLossPercent !== null && mergedConfig?.stopLossPercent !== undefined);
+    
+    const enableMaxPos = cachedConfig?.enableMaxPos !== undefined 
+      ? cachedConfig.enableMaxPos 
+      : (mergedConfig?.maxPositionTime !== null && mergedConfig?.maxPositionTime !== undefined);
+    
+    setTempSettings({
+      profitTarget: params.profitTarget,
+      stopLoss: params.stopLoss,
+      maxPositionTime: params.maxPositionTime,
+      enableTP,
+      enableSL,
+      enableMaxPos
+    });
+    setSettingsOpen(strategyName);
+  };
+
+  const closeSettings = () => {
+    setSettingsOpen(null);
+  };
+
+  // Sauvegarde automatique dès modification (avec debounce)
+  const autoSaveSettings = (strategyName: string, newSettings: typeof tempSettings) => {
+    const newConfig = {
+      profitTargetPercent: newSettings.enableTP ? newSettings.profitTarget : null,
+      stopLossPercent: newSettings.enableSL ? newSettings.stopLoss : null,
+      maxPositionTime: newSettings.enableMaxPos ? newSettings.maxPositionTime : null,
+      enableTP: newSettings.enableTP,
+      enableSL: newSettings.enableSL,
+      enableMaxPos: newSettings.enableMaxPos
+    };
+    
+    // Mettre à jour le cache local immédiatement pour l'UI réactive
+    setLocalConfigCache(prev => ({
+      ...prev,
+      [strategyName]: newConfig
+    }));
+    
+    // Notifier le parent immédiatement pour mettre à jour le graphique
+    if (onConfigChange) {
+      onConfigChange(strategyName, newConfig);
+    }
+    
+    // Annuler le timer précédent si existe
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+    }
+
+    // Nouveau timer de 500ms
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        const config: any = {
+          // Envoyer null si désactivé, la valeur si activé
+          profitTarget: newSettings.enableTP ? newSettings.profitTarget : null,
+          stopLoss: newSettings.enableSL ? newSettings.stopLoss : null,
+          maxPositionTime: newSettings.enableMaxPos ? newSettings.maxPositionTime : null
+        };
+
+        const response = await fetch('/api/strategy-config', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            strategyName,
+            config
+          })
+        });
+
+        const data = await response.json();
+        
+        if (response.ok) {
+          console.log(`✅ Auto-saved:`, config);
+          // Déclencher un refresh pour synchroniser avec le backend
+          if (onRefresh) {
+            onRefresh();
+          }
+      } else {
+          console.error(`❌ Auto-save failed:`, data.error);
+        }
+      } catch (error) {
+        console.error('❌ Error auto-saving:', error);
+      }
+    }, 500); // Debounce de 500ms
+  };
+
+  const calculateRiskReward = () => {
+    if (tempSettings.stopLoss === 0) return 0;
+    return tempSettings.profitTarget / tempSettings.stopLoss;
   };
 
   const getStrategyDescription = (strategyType: string) => {
@@ -110,23 +349,6 @@ export default function StrategyPanel({
         ],
         logic: 'La stratégie attend une forte conviction avec trois confirmations : volume élevé (activité du marché), momentum confirmé (MACD) et prix favorable par rapport au VWAP. Cette triple confirmation maximise les chances de succès.'
       },
-      'NEURAL_SCALPER': {
-        title: 'Neural Scalper',
-        description: 'Stratégie de scalping ultra-rapide utilisant l\'analyse de l\'accélération et de la volatilité.',
-        longCriteria: [
-          '⚡ Accélération détectée : Mouvement de prix rapide et significatif',
-          '📊 Volatilité élevée : Conditions favorables au scalping',
-          '📈 RSI momentum positif : Direction haussière confirmée',
-          '⏱️ Cooldown : 30 secondes seulement'
-        ],
-        shortCriteria: [
-          '⚡ Accélération détectée : Mouvement de prix rapide et significatif',
-          '📊 Volatilité élevée : Conditions favorables au scalping',
-          '📉 RSI momentum négatif : Direction baissière confirmée',
-          '⏱️ Cooldown : 30 secondes seulement'
-        ],
-        logic: 'Stratégie de scalping qui capture les mouvements rapides sur de très courtes périodes (maximum 2 minutes en position). Idéale pour les marchés très volatils avec des mouvements brusques. Attention : haute fréquence = risque élevé.'
-      },
       'BOLLINGER_BOUNCE': {
         title: 'Bollinger Bounce (Mean Reversion)',
         description: 'Cette stratégie profite des rebonds sur les bandes de Bollinger avec confirmation RSI.',
@@ -160,6 +382,23 @@ export default function StrategyPanel({
           '🔄 Fermeture auto si tendance s\'inverse'
         ],
         logic: 'La stratégie suit la tendance de manière simple : LONG quand le prix est au-dessus de l\'EMA50, SHORT quand il est en-dessous. Dès que la tendance s\'inverse, la position est fermée et une nouvelle position opposée est ouverte automatiquement. Pas de cooldown, inversion instantanée.'
+      },
+      'ATR_PULLBACK': {
+        title: 'ATR Trend Pullback',
+        description: 'Stratégie prudente: entrées sur pullback vers EMA50 dans la direction de la tendance, validées par ATR et une bougie de retournement.',
+        longCriteria: [
+          '🚀 EMA50 > EMA200 : Tendance haussière',
+          '↔️ Prix proche EMA50 (±0.5×ATR)',
+          '📊 RSI 35-55 : neutralité/retour à la moyenne',
+          '🕯️ Bougie de retournement haussière'
+        ],
+        shortCriteria: [
+          '📉 EMA50 < EMA200 : Tendance baissière',
+          '↔️ Prix proche EMA50 (±0.5×ATR)',
+          '📊 RSI 45-65 : neutralité/retour à la moyenne',
+          '🕯️ Bougie de retournement baissière'
+        ],
+        logic: 'On suit la tendance principale (EMA50 vs EMA200) et on attend un pullback contrôlé (ATR) vers EMA50. L\'entrée se fait sur un signal de retournement (bougie) avec RSI modéré pour éviter le surachat/survente extrêmes. Objectif: quelques setups propres par jour.'
       }
     };
     return descriptions[strategyType] || null;
@@ -190,23 +429,41 @@ export default function StrategyPanel({
   };
 
   // Get strategy parameters (SL/TP based on strategy type)
-  const getStrategyParams = (strategyType: string) => {
-    switch (strategyType) {
-      case 'RSI_EMA':
-        return { profitTarget: 2.5, stopLoss: 1.5, maxPositionTime: 60, cooldown: 300 };
-      case 'MOMENTUM_CROSSOVER':
-        return { profitTarget: 2.0, stopLoss: 1.0, maxPositionTime: 30, cooldown: 180 };
-      case 'VOLUME_MACD':
-        return { profitTarget: 2.0, stopLoss: 1.0, maxPositionTime: 45, cooldown: 180 };
-      case 'NEURAL_SCALPER':
-        return { profitTarget: 1.5, stopLoss: 0.8, maxPositionTime: 2, cooldown: 0.5 };
-      case 'BOLLINGER_BOUNCE':
-        return { profitTarget: 1.8, stopLoss: 2.0, maxPositionTime: 120, cooldown: 0 };
-      case 'TREND_FOLLOWER':
-        return { profitTarget: 2.0, stopLoss: 2.0, maxPositionTime: 999, cooldown: 0 };
-      default:
-        return { profitTarget: 2.0, stopLoss: 1.0, maxPositionTime: 60, cooldown: 300 };
+  const formatCooldown = (ms: number) => {
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    const hours = Math.floor(minutes / 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes % 60}m`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    } else {
+      return `${seconds}s`;
     }
+  };
+
+  const getStrategyParams = (strategyType: string, strategyConfig?: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }) => {
+    // Valeurs par défaut
+    const defaults: Record<string, { profitTarget: number; stopLoss: number; maxPositionTime: number; cooldown: number }> = {
+      'RSI_EMA': { profitTarget: 2.5, stopLoss: 1.5, maxPositionTime: 60, cooldown: 300 },
+      'MOMENTUM_CROSSOVER': { profitTarget: 2.0, stopLoss: 1.0, maxPositionTime: 30, cooldown: 180 },
+      'VOLUME_MACD': { profitTarget: 2.0, stopLoss: 1.0, maxPositionTime: 45, cooldown: 180 },
+      'NEURAL_SCALPER': { profitTarget: 1.5, stopLoss: 0.8, maxPositionTime: 2, cooldown: 0.5 },
+      'BOLLINGER_BOUNCE': { profitTarget: 1.8, stopLoss: 2.0, maxPositionTime: 120, cooldown: 0 },
+      'TREND_FOLLOWER': { profitTarget: 2.0, stopLoss: 2.0, maxPositionTime: 999, cooldown: 0 },
+      'ATR_PULLBACK': { profitTarget: 1.2, stopLoss: 0.8, maxPositionTime: 180, cooldown: 3600 }
+    };
+
+    const defaultParams = defaults[strategyType] || { profitTarget: 2.0, stopLoss: 1.0, maxPositionTime: 60, cooldown: 300 };
+
+    // Override avec les paramètres de la config si disponibles
+    return {
+      profitTarget: strategyConfig?.profitTargetPercent ?? defaultParams.profitTarget,
+      stopLoss: strategyConfig?.stopLossPercent ?? defaultParams.stopLoss,
+      maxPositionTime: strategyConfig?.maxPositionTime ?? defaultParams.maxPositionTime,
+      cooldown: defaultParams.cooldown
+    };
   };
 
   // Strategy color mapping
@@ -215,42 +472,49 @@ export default function StrategyPanel({
       case 'RSI_EMA':
         return {
           border: 'border-blue-400',
+          borderDimmed: 'border-blue-400/40',
           text: 'text-blue-400',
           accent: 'bg-blue-400'
         };
       case 'MOMENTUM_CROSSOVER':
         return {
           border: 'border-purple-400',
+          borderDimmed: 'border-purple-400/40',
           text: 'text-purple-400',
           accent: 'bg-purple-400'
         };
       case 'VOLUME_MACD':
         return {
           border: 'border-orange-400',
+          borderDimmed: 'border-orange-400/40',
           text: 'text-orange-400',
           accent: 'bg-orange-400'
-        };
-      case 'NEURAL_SCALPER':
-        return {
-          border: 'border-pink-400',
-          text: 'text-pink-400',
-          accent: 'bg-pink-400'
         };
       case 'BOLLINGER_BOUNCE':
         return {
           border: 'border-teal-400',
+          borderDimmed: 'border-teal-400/40',
           text: 'text-teal-400',
           accent: 'bg-teal-400'
         };
       case 'TREND_FOLLOWER':
         return {
           border: 'border-cyan-400',
+          borderDimmed: 'border-cyan-400/40',
           text: 'text-cyan-400',
           accent: 'bg-cyan-400'
+        };
+      case 'ATR_PULLBACK':
+        return {
+          border: 'border-lime-400',
+          borderDimmed: 'border-lime-400/40',
+          text: 'text-lime-400',
+          accent: 'bg-lime-400'
         };
       default:
         return {
           border: 'border-gray-400',
+          borderDimmed: 'border-gray-400/40',
           text: 'text-gray-400',
           accent: 'bg-gray-400'
         };
@@ -261,6 +525,9 @@ export default function StrategyPanel({
   if (performances.length === 0) {
     return null;
   }
+
+  // Trier les stratégies selon plusieurs critères
+  const sortedPerformances = sortStrategies(performances);
 
   // Find best strategy
   const bestStrategy = performances.reduce((best, current) => 
@@ -281,6 +548,17 @@ export default function StrategyPanel({
             {bestStrategy ? `+${bestStrategy.totalPnL.toFixed(2)} USDT` : '0.00'}
           </div>
         </div>
+
+        {/* View Mode & Sort Buttons */}
+        <div className="flex gap-3">
+          {/* Sort Button */}
+          <button
+            onClick={cycleSortMode}
+            className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 rounded-lg border border-gray-700/50 hover:border-gray-600 transition-all text-gray-300 hover:text-white"
+            title={`Tri actuel: ${getSortLabel()} - Cliquer pour changer`}
+          >
+            {getSortIcon()}
+          </button>
 
         {/* View Mode Buttons */}
         <div className="flex gap-1 p-1 bg-gray-800/50 rounded-lg border border-gray-700/50">
@@ -308,6 +586,7 @@ export default function StrategyPanel({
               <rect x="4" y="4" width="12" height="12" rx="1" />
             </svg>
           </button>
+          </div>
         </div>
       </div>
 
@@ -316,10 +595,10 @@ export default function StrategyPanel({
         viewMode === 'compact' 
           ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4' 
           : flippedCards.size > 0
-          ? 'grid-cols-1 lg:grid-cols-2'
+          ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
           : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
       }`}>
-        {performances.map((perf) => {
+        {sortedPerformances.map((perf) => {
           const colors = getStrategyColor(perf.strategyType);
           
           // Get criteria for this strategy
@@ -340,10 +619,12 @@ export default function StrategyPanel({
                   onSelectStrategy?.(perf.strategyName);
                 }
               }}
-              className={`bg-gray-900 rounded-lg p-3 border-2 transition-all cursor-pointer ${
-                perf.isActive 
+              className={`bg-gray-900 rounded-lg p-3 border-2 transition-all cursor-pointer h-fit ${
+                !perf.isActive 
+                  ? 'border-gray-700 opacity-60'
+                  : selectedStrategy === 'GLOBAL' || selectedStrategy === perf.strategyName
                   ? colors.border
-                  : 'border-gray-700 opacity-60'
+                    : colors.borderDimmed
               } ${
                 perf.strategyName === bestStrategy.strategyName && perf.totalPnL > 0
                   ? 'ring-2 ring-yellow-400'
@@ -374,11 +655,11 @@ export default function StrategyPanel({
                       {/* LONG Status Points */}
                       <div className="flex gap-1">
                         {longStatuses.map((status, idx) => (
-                          <span key={`long-${idx}`} className={`w-2 h-2 rounded-full ${
+                          <span key={`long-${idx}`} className={`w-2 h-2 rounded-full transition-all duration-300 ${
                             longReady 
                               ? 'bg-green-500 shadow-lg shadow-green-500/50 animate-pulse' 
-                              : status === 'green' ? 'bg-green-500/70' : 
-                                status === 'orange' ? 'bg-orange-400/60' : 
+                              : status === 'green' ? 'bg-green-500 shadow-md shadow-green-500/40 animate-pulse' : 
+                                status === 'orange' ? 'bg-orange-400 shadow-sm shadow-orange-400/40 animate-pulse' : 
                                 'bg-gray-500/30'
                           }`}></span>
                         ))}
@@ -390,16 +671,26 @@ export default function StrategyPanel({
                       {/* SHORT Status Points */}
                       <div className="flex gap-1">
                         {shortStatuses.map((status, idx) => (
-                          <span key={`short-${idx}`} className={`w-2 h-2 rounded-full ${
+                          <span key={`short-${idx}`} className={`w-2 h-2 rounded-full transition-all duration-300 ${
                             shortReady 
                               ? 'bg-red-500 shadow-lg shadow-red-500/50 animate-pulse' 
-                              : status === 'green' ? 'bg-green-500/70' : 
-                                status === 'orange' ? 'bg-orange-400/60' : 
+                              : status === 'green' ? 'bg-green-500 shadow-md shadow-green-500/40 animate-pulse' : 
+                                status === 'orange' ? 'bg-orange-400 shadow-sm shadow-orange-400/40 animate-pulse' : 
                                 'bg-gray-500/30'
                           }`}></span>
                         ))}
                       </div>
                     </div>
+                    
+                    {/* Cooldown Display */}
+                    {strategyCriteria && strategyCriteria.cooldownRemaining > 0 && (
+                      <div className="flex items-center gap-1 mt-2">
+                        <HiClock className="w-3 h-3 text-orange-400" />
+                        <span className="text-xs text-orange-400">
+                          {formatCooldown(strategyCriteria.cooldownRemaining)}
+                        </span>
+                      </div>
+                    )}
                     
                     {/* Toggle Switch */}
                     <button
@@ -443,7 +734,7 @@ export default function StrategyPanel({
                   {perf.currentPosition.type !== 'NONE' && (
                     <div className="flex items-center justify-between pt-2 border-t border-gray-700/50">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-gray-400">Unrealized:</span>
+                      <span className="text-xs text-gray-400">Unrealized:</span>
                         <div className={`w-1.5 h-1.5 rounded-full ${
                           perf.currentPosition.type === 'LONG' ? 'bg-green-500' : 'bg-red-500'
                         }`}></div>
@@ -462,166 +753,38 @@ export default function StrategyPanel({
               ) : (
                 // NORMAL MODE
                 <>
-                  {flippedCards.has(perf.strategyName) ? (
-                    // FACE ARRIÈRE - Description détaillée de la stratégie
-                    <div className="p-4 bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg border border-gray-600">
-                      <div className="flex items-center justify-between mb-3 border-b border-gray-700 pb-2">
-                        <h3 className={`text-base font-bold ${colors.text}`}>
-                          {getStrategyDescription(perf.strategyType)?.title}
-                        </h3>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleCardFlip(perf.strategyName);
-                          }}
-                          className="p-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
-                          title="Retour à la vue normale"
-                        >
-                          <HiBookOpen className="w-4 h-4" />
-                        </button>
-                      </div>
-                      
-                      <div className="space-y-3">
-                        {/* Description */}
-                        <p className="text-sm text-gray-300 leading-relaxed">
-                          {getStrategyDescription(perf.strategyType)?.description}
-                        </p>
-                        
-                        {/* Critères LONG - Réduisible */}
-                        <div className="bg-green-900/10 border border-green-500/30 rounded-lg overflow-hidden">
-                          <div 
-                            className="p-3 cursor-pointer hover:bg-green-900/20 transition-colors flex items-center justify-between"
-                            onClick={() => toggleSection(perf.strategyName, 'long')}
-                          >
-                            <h4 className="text-sm font-bold text-green-400">🟢 Conditions d'ACHAT (LONG)</h4>
-                            {isSectionExpanded(perf.strategyName, 'long') ? (
-                              <HiChevronDown className="w-4 h-4 text-green-400" />
-                            ) : (
-                              <HiChevronRight className="w-4 h-4 text-green-400" />
-                            )}
-                          </div>
-                          {isSectionExpanded(perf.strategyName, 'long') && (
-                            <ul className="px-3 pb-3 space-y-1.5">
-                              {getStrategyDescription(perf.strategyType)?.longCriteria.map((criteria, idx) => (
-                                <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
-                                  <span className="text-green-400 mt-0.5">•</span>
-                                  <span>{criteria}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                        
-                        {/* Critères SHORT - Réduisible */}
-                        <div className="bg-red-900/10 border border-red-500/30 rounded-lg overflow-hidden">
-                          <div 
-                            className="p-3 cursor-pointer hover:bg-red-900/20 transition-colors flex items-center justify-between"
-                            onClick={() => toggleSection(perf.strategyName, 'short')}
-                          >
-                            <h4 className="text-sm font-bold text-red-400">🔴 Conditions de VENTE (SHORT)</h4>
-                            {isSectionExpanded(perf.strategyName, 'short') ? (
-                              <HiChevronDown className="w-4 h-4 text-red-400" />
-                            ) : (
-                              <HiChevronRight className="w-4 h-4 text-red-400" />
-                            )}
-                          </div>
-                          {isSectionExpanded(perf.strategyName, 'short') && (
-                            <ul className="px-3 pb-3 space-y-1.5">
-                              {getStrategyDescription(perf.strategyType)?.shortCriteria.map((criteria, idx) => (
-                                <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
-                                  <span className="text-red-400 mt-0.5">•</span>
-                                  <span>{criteria}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                        
-                        {/* Logique - Réduisible */}
-                        <div className="bg-blue-900/10 border border-blue-500/30 rounded-lg overflow-hidden">
-                          <div 
-                            className="p-3 cursor-pointer hover:bg-blue-900/20 transition-colors flex items-center justify-between"
-                            onClick={() => toggleSection(perf.strategyName, 'logic')}
-                          >
-                            <h4 className="text-sm font-bold text-blue-400">💡 Logique de la stratégie</h4>
-                            {isSectionExpanded(perf.strategyName, 'logic') ? (
-                              <HiChevronDown className="w-4 h-4 text-blue-400" />
-                            ) : (
-                              <HiChevronRight className="w-4 h-4 text-blue-400" />
-                            )}
-                          </div>
-                          {isSectionExpanded(perf.strategyName, 'logic') && (
-                            <p className="px-3 pb-3 text-xs text-gray-300 leading-relaxed">
-                              {getStrategyDescription(perf.strategyType)?.logic}
-                            </p>
-                          )}
-                        </div>
-                        
-                        {/* Paramètres - Réduisible */}
-                        <div className="bg-gray-800/50 border border-gray-600/30 rounded-lg overflow-hidden">
-                          <div 
-                            className="p-3 cursor-pointer hover:bg-gray-700/50 transition-colors flex items-center justify-between"
-                            onClick={() => toggleSection(perf.strategyName, 'params')}
-                          >
-                            <h4 className="text-sm font-bold text-gray-400">⚙️ Paramètres de trading</h4>
-                            {isSectionExpanded(perf.strategyName, 'params') ? (
-                              <HiChevronDown className="w-4 h-4 text-gray-400" />
-                            ) : (
-                              <HiChevronRight className="w-4 h-4 text-gray-400" />
-                            )}
-                          </div>
-                          {isSectionExpanded(perf.strategyName, 'params') && (
-                            <div className="px-3 pb-3 grid grid-cols-2 gap-2 text-xs">
-                              <div className="flex justify-between">
-                                <span className="text-gray-400">Take Profit:</span>
-                                <span className="text-green-400 font-semibold">+{getStrategyParams(perf.strategyType).profitTarget}%</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-gray-400">Stop Loss:</span>
-                                <span className="text-red-400 font-semibold">-{getStrategyParams(perf.strategyType).stopLoss}%</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-gray-400">Max Position:</span>
-                                <span className="text-white font-semibold">{getStrategyParams(perf.strategyType).maxPositionTime}min</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-gray-400">Risk/Reward:</span>
-                                <span className="text-blue-400 font-semibold">1:{(getStrategyParams(perf.strategyType).profitTarget / getStrategyParams(perf.strategyType).stopLoss).toFixed(1)}</span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    // FACE AVANT - Vue normale
-                    <>
-                  {/* Header: Strategy Name + Buttons */}
+                  {/* Header: Strategy Name + Buttons (TOUJOURS VISIBLE) */}
                   <div className="mb-3 pb-3 border-b border-gray-700/50 flex items-start justify-between">
-                    <div className="flex flex-col">
-                      <div className="flex items-center gap-2">
-                        <h3 className={`text-base font-semibold ${colors.text}`}>{perf.strategyName}</h3>
+                    <div 
+                      className="flex flex-col cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={(e) => {
+                        if (settingsOpen === perf.strategyName) {
+                        e.stopPropagation();
+                          closeSettings();
+                        }
+                      }}
+                      title={settingsOpen === perf.strategyName ? "Cliquer pour fermer les paramètres" : ""}
+                    >
+                    <div className="flex items-center gap-2">
+                      <h3 className={`text-base font-semibold ${colors.text}`}>{perf.strategyName}</h3>
                         {/* Status Indicator */}
                         <div className={`w-2 h-2 rounded-full ${
                           perf.isActive 
                             ? 'bg-green-500 shadow-lg shadow-green-500/50 animate-pulse' 
                             : 'bg-red-500'
                         }`}></div>
-                        {perf.strategyName === bestStrategy.strategyName && perf.totalPnL > 0 && (
-                          <span className="text-yellow-400 text-sm">👑</span>
-                        )}
-                        {selectedStrategy === perf.strategyName && (
-                          <span className="text-blue-400 text-sm">👁️</span>
-                        )}
-                      </div>
+                      {perf.strategyName === bestStrategy.strategyName && perf.totalPnL > 0 && (
+                        <span className="text-yellow-400 text-sm">👑</span>
+                      )}
+                    </div>
                       <div className={`h-0.5 w-24 ${colors.accent} mt-1.5 mb-1.5 rounded-full`}></div>
                       <span className={`text-sm font-bold ${
-                        perf.currentCapital >= 100000 ? 'text-green-400' : 'text-red-400'
+                      perf.currentCapital >= 100000 ? 'text-green-400' : 'text-red-400'
                       }`}>
-                        ${perf.currentCapital.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      ${perf.currentCapital.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
-                    
+
                     <div className="flex items-start gap-1.5">
                       {/* Read Button */}
                       <button
@@ -630,11 +793,29 @@ export default function StrategyPanel({
                           toggleCardFlip(perf.strategyName);
                         }}
                         className={`p-1.5 ${colors.text} hover:opacity-70 transition-opacity`}
-                        title="Voir les détails de la stratégie"
+                        title={flippedCards.has(perf.strategyName) ? "Retour à la vue normale" : "Voir les détails de la stratégie"}
                       >
                         <HiBookOpen className="w-3.5 h-3.5" />
                       </button>
-                      
+
+                      {/* Settings Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (settingsOpen === perf.strategyName) {
+                            closeSettings();
+                          } else {
+                            openSettings(perf.strategyName, perf.strategyType, perf.config);
+                          }
+                        }}
+                        className={`p-1.5 ${colors.text} hover:opacity-70 transition-opacity ${
+                          settingsOpen === perf.strategyName ? 'opacity-100' : ''
+                        }`}
+                        title="Paramètres de la stratégie"
+                      >
+                        <HiCog className="w-3.5 h-3.5" />
+                      </button>
+
                       {/* Reset Button */}
                       {resetConfirm === perf.strategyName ? (
                         <div className="flex items-center gap-1">
@@ -666,7 +847,7 @@ export default function StrategyPanel({
                             setResetConfirm(perf.strategyName);
                           }}
                           className={`p-1.5 ${colors.text} hover:opacity-70 transition-opacity`}
-                          title="Réinitialiser"
+                          title="Réinitialiser la stratégie"
                         >
                           <HiRefresh className="w-3.5 h-3.5" />
                         </button>
@@ -678,13 +859,13 @@ export default function StrategyPanel({
                           e.stopPropagation();
                           onToggleStrategy?.(perf.strategyName);
                         }}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                           perf.isActive ? 'bg-gray-700' : 'bg-gray-600'
                         }`}
                         title={perf.isActive ? 'Désactiver' : 'Activer'}
                       >
-                        <span className={`inline-block h-4 w-4 transform rounded-full transition-transform ${
-                          perf.isActive ? 'translate-x-6' : 'translate-x-1'
+                      <span className={`inline-block h-4 w-4 transform rounded-full transition-transform ${
+                        perf.isActive ? 'translate-x-6' : 'translate-x-1'
                         } ${
                           perf.isActive ? colors.accent : 'bg-gray-400'
                         }`} />
@@ -692,6 +873,216 @@ export default function StrategyPanel({
                     </div>
                   </div>
 
+                  {settingsOpen === perf.strategyName ? (
+                    // MODE SETTINGS - Modification des paramètres (AUTO-SAVE)
+                    <div className="space-y-2 bg-gray-800/50 rounded-lg border border-gray-600/50">
+                      {/* Risk/Reward Affichage */}
+                      <div className="px-3 py-2 bg-gradient-to-r from-purple-900/20 to-blue-900/20 border-b border-purple-500/30 flex items-center justify-between">
+                        <span className="text-[10px] text-gray-400">Risk/Reward:</span>
+                        <span className={`text-sm font-bold ${
+                          !tempSettings.enableTP || !tempSettings.enableSL ? 'text-gray-500' :
+                          calculateRiskReward() >= 1.5 ? 'text-green-400' :
+                          calculateRiskReward() >= 1 ? 'text-yellow-400' :
+                          'text-red-400'
+                        }`}>
+                          {tempSettings.enableTP && tempSettings.enableSL ? `1:${calculateRiskReward().toFixed(2)}` : 'N/A'}
+                        </span>
+                    </div>
+                    
+                      <div className="px-3 pb-3 space-y-2">
+                            {/* Take Profit */}
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] text-gray-400">TP</span>
+                                <span className={`font-bold text-xs ${tempSettings.enableTP ? 'text-green-400' : 'text-gray-600'}`}>
+                                  +{tempSettings.profitTarget.toFixed(1)}%
+                                </span>
+                      </div>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={tempSettings.enableTP}
+                                  onChange={(e) => {
+                                    const newSettings = { ...tempSettings, enableTP: e.target.checked };
+                                    setTempSettings(newSettings);
+                                    autoSaveSettings(perf.strategyName, newSettings);
+                                  }}
+                                  className="w-3 h-3 rounded accent-green-500 flex-shrink-0"
+                                />
+                                {tempSettings.enableTP && (
+                                  <input
+                                    type="range"
+                                    min="0.1"
+                                    max="50"
+                                    step="0.1"
+                                    value={tempSettings.profitTarget}
+                                    onChange={(e) => {
+                                      const newSettings = { ...tempSettings, profitTarget: parseFloat(e.target.value) };
+                                      setTempSettings(newSettings);
+                                      autoSaveSettings(perf.strategyName, newSettings);
+                                    }}
+                                    className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500"
+                                  />
+                                )}
+                      </div>
+                    </div>
+                    
+                        {/* Stop Loss */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-400">SL</span>
+                            <span className={`font-bold text-xs ${tempSettings.enableSL ? 'text-red-400' : 'text-gray-600'}`}>
+                              -{tempSettings.stopLoss.toFixed(1)}%
+                            </span>
+                      </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={tempSettings.enableSL}
+                              onChange={(e) => {
+                                const newSettings = { ...tempSettings, enableSL: e.target.checked };
+                                setTempSettings(newSettings);
+                                autoSaveSettings(perf.strategyName, newSettings);
+                              }}
+                              className="w-3 h-3 rounded accent-red-500 flex-shrink-0"
+                            />
+                            {tempSettings.enableSL && (
+                              <input
+                                type="range"
+                                min="0.1"
+                                max="50"
+                                step="0.1"
+                                value={tempSettings.stopLoss}
+                                onChange={(e) => {
+                                  const newSettings = { ...tempSettings, stopLoss: parseFloat(e.target.value) };
+                                  setTempSettings(newSettings);
+                                  autoSaveSettings(perf.strategyName, newSettings);
+                                }}
+                                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500"
+                              />
+                            )}
+                    </div>
+                  </div>
+
+                        {/* Max Position Time */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-400">Max</span>
+                            <span className={`font-bold text-xs ${tempSettings.enableMaxPos ? 'text-blue-400' : 'text-gray-600'}`}>
+                              {tempSettings.maxPositionTime}min
+                          </span>
+                        </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={tempSettings.enableMaxPos}
+                              onChange={(e) => {
+                                const newSettings = { ...tempSettings, enableMaxPos: e.target.checked };
+                                setTempSettings(newSettings);
+                                autoSaveSettings(perf.strategyName, newSettings);
+                              }}
+                              className="w-3 h-3 rounded accent-blue-500 flex-shrink-0"
+                            />
+                            {tempSettings.enableMaxPos && (
+                              <input
+                                type="range"
+                                min="1"
+                                max="500"
+                                step="1"
+                                value={tempSettings.maxPositionTime}
+                                onChange={(e) => {
+                                  const newSettings = { ...tempSettings, maxPositionTime: parseInt(e.target.value) };
+                                  setTempSettings(newSettings);
+                                  autoSaveSettings(perf.strategyName, newSettings);
+                                }}
+                                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                              />
+                            )}
+                      </div>
+                        </div>
+                        </div>
+                        </div>
+                  ) : flippedCards.has(perf.strategyName) ? (
+                    // MODE LECTURE - Description détaillée de la stratégie
+                    <div className="space-y-3">
+                      {/* Description */}
+                      <p className="text-sm text-gray-300 leading-relaxed">
+                        {getStrategyDescription(perf.strategyType)?.description}
+                      </p>
+                      
+                      {/* Critères LONG - Réduisible */}
+                      <div className="bg-green-900/10 border border-green-500/30 rounded-lg overflow-hidden">
+                        <div 
+                          className="p-3 cursor-pointer hover:bg-green-900/20 transition-colors flex items-center justify-between"
+                          onClick={() => toggleSection(perf.strategyName, 'long')}
+                        >
+                          <h4 className="text-sm font-bold text-green-400">🟢 Conditions d'ACHAT (LONG)</h4>
+                          {isSectionExpanded(perf.strategyName, 'long') ? (
+                            <HiChevronDown className="w-4 h-4 text-green-400" />
+                          ) : (
+                            <HiChevronRight className="w-4 h-4 text-green-400" />
+                          )}
+                        </div>
+                        {isSectionExpanded(perf.strategyName, 'long') && (
+                          <ul className="px-3 pb-3 space-y-1.5">
+                            {getStrategyDescription(perf.strategyType)?.longCriteria.map((criteria, idx) => (
+                              <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
+                                <span className="text-green-400 mt-0.5">•</span>
+                                <span>{criteria}</span>
+                              </li>
+                            ))}
+                          </ul>
+                      )}
+                      </div>
+                      
+                      {/* Critères SHORT - Réduisible */}
+                      <div className="bg-red-900/10 border border-red-500/30 rounded-lg overflow-hidden">
+                        <div 
+                          className="p-3 cursor-pointer hover:bg-red-900/20 transition-colors flex items-center justify-between"
+                          onClick={() => toggleSection(perf.strategyName, 'short')}
+                        >
+                          <h4 className="text-sm font-bold text-red-400">🔴 Conditions de VENTE (SHORT)</h4>
+                          {isSectionExpanded(perf.strategyName, 'short') ? (
+                            <HiChevronDown className="w-4 h-4 text-red-400" />
+                          ) : (
+                            <HiChevronRight className="w-4 h-4 text-red-400" />
+                          )}
+                        </div>
+                        {isSectionExpanded(perf.strategyName, 'short') && (
+                          <ul className="px-3 pb-3 space-y-1.5">
+                            {getStrategyDescription(perf.strategyType)?.shortCriteria.map((criteria, idx) => (
+                              <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
+                                <span className="text-red-400 mt-0.5">•</span>
+                                <span>{criteria}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      
+                      {/* Logique - Réduisible */}
+                      <div className="bg-blue-900/10 border border-blue-500/30 rounded-lg overflow-hidden">
+                        <div 
+                          className="p-3 cursor-pointer hover:bg-blue-900/20 transition-colors flex items-center justify-between"
+                          onClick={() => toggleSection(perf.strategyName, 'logic')}
+                        >
+                          <h4 className="text-sm font-bold text-blue-400">💡 Logique de la stratégie</h4>
+                          {isSectionExpanded(perf.strategyName, 'logic') ? (
+                            <HiChevronDown className="w-4 h-4 text-blue-400" />
+                          ) : (
+                            <HiChevronRight className="w-4 h-4 text-blue-400" />
+                          )}
+                        </div>
+                        {isSectionExpanded(perf.strategyName, 'logic') && (
+                          <p className="px-3 pb-3 text-xs text-gray-300 leading-relaxed">
+                            {getStrategyDescription(perf.strategyType)?.logic}
+                          </p>
+                        )}
+                        </div>
+                      </div>
+                  ) : (
+                    // MODE NORMAL - Stats et métriques
+                    <>
                   {/* Detailed Criteria with status points on the right */}
                   {strategyCriteria && renderCriteriaLabels && (
                     <div className="mb-3 pb-3 border-b border-gray-700/50">
@@ -701,20 +1092,20 @@ export default function StrategyPanel({
                           <div className="flex items-center gap-2">
                             <span className={`text-base ${longReady ? 'text-green-500 drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]' : 'text-green-400/40'}`}>🟢</span>
                             {renderCriteriaLabels(strategyCriteria, 'long')}
-                          </div>
+                            </div>
                           {/* Status points for LONG - on the right */}
                           <div className="flex gap-1">
-                            {longStatuses.map((status, idx) => (
-                              <span key={`long-${idx}`} className={`w-2 h-2 rounded-full ${
-                                longReady 
+                              {longStatuses.map((status, idx) => (
+                                <span key={`long-${idx}`} className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                                  longReady 
                                   ? 'bg-green-500 shadow-lg shadow-green-500/50 animate-pulse' 
-                                  : status === 'green' ? 'bg-green-500/70' : 
-                                    status === 'orange' ? 'bg-orange-400/60' : 
-                                    'bg-gray-500/30'
-                              }`}></span>
-                            ))}
+                                    : status === 'green' ? 'bg-green-500 shadow-md shadow-green-500/40 animate-pulse' : 
+                                      status === 'orange' ? 'bg-orange-400 shadow-sm shadow-orange-400/40 animate-pulse' : 
+                                      'bg-gray-500/30'
+                                }`}></span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
                         {/* SHORT Criteria with status points */}
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
@@ -723,83 +1114,101 @@ export default function StrategyPanel({
                           </div>
                           {/* Status points for SHORT - on the right */}
                           <div className="flex gap-1">
-                            {shortStatuses.map((status, idx) => (
-                              <span key={`short-${idx}`} className={`w-2 h-2 rounded-full ${
-                                shortReady 
+                              {shortStatuses.map((status, idx) => (
+                                <span key={`short-${idx}`} className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                                  shortReady 
                                   ? 'bg-red-500 shadow-lg shadow-red-500/50 animate-pulse' 
-                                  : status === 'green' ? 'bg-green-500/70' : 
-                                    status === 'orange' ? 'bg-orange-400/60' : 
-                                    'bg-gray-500/30'
-                              }`}></span>
-                            ))}
-                          </div>
+                                    : status === 'green' ? 'bg-green-500 shadow-md shadow-green-500/40 animate-pulse' : 
+                                      status === 'orange' ? 'bg-orange-400 shadow-sm shadow-orange-400/40 animate-pulse' : 
+                                      'bg-gray-500/30'
+                                }`}></span>
+                              ))}
                         </div>
+                      </div>
+                      
+                        {/* Cooldown Display */}
+                        {strategyCriteria.cooldownRemaining > 0 && (
+                          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/30">
+                            <HiClock className="w-3 h-3 text-orange-400" />
+                            <span className="text-xs text-orange-400">
+                              Cooldown: {formatCooldown(strategyCriteria.cooldownRemaining)}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {/* Performance Metrics */}
-                  <div className="space-y-1.5">
-                    {/* Total PnL */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-400">Total P&L:</span>
-                      <span className={`text-sm font-bold ${
-                        perf.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                      }`}>
-                        {perf.totalPnL >= 0 ? '+' : ''}{perf.totalPnL.toFixed(2)} USDT
-                      </span>
-                    </div>
-
-                    {/* Win Rate */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-400">Win Rate:</span>
-                      <span className={`text-sm font-semibold ${
-                        perf.winRate >= 50 ? 'text-green-400' : 'text-orange-400'
-                      }`}>
-                        {perf.winRate.toFixed(1)}%
-                      </span>
-                    </div>
-
-                    {/* Trades */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-400">Trades:</span>
-                      <span className="text-sm text-white">
-                        {perf.winningTrades}/{perf.totalTrades}
-                      </span>
-                    </div>
-
-                    {/* Current Position */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-400">Position:</span>
-                      <span className={`text-sm font-semibold ${
-                        perf.currentPosition.type === 'LONG' ? 'text-green-400' :
-                        perf.currentPosition.type === 'SHORT' ? 'text-red-400' :
-                        'text-gray-400'
-                      }`}>
-                        {perf.currentPosition.type}
-                      </span>
-                    </div>
-
-                    {/* Unrealized P&L if in position */}
-                    {perf.currentPosition.type !== 'NONE' && (
-                      <div className="flex items-center justify-between pt-2 border-t border-gray-700">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs text-gray-400">Unrealized:</span>
-                          <div className={`w-1.5 h-1.5 rounded-full ${
-                            perf.currentPosition.type === 'LONG' ? 'bg-green-500' : 'bg-red-500'
-                          }`}></div>
-                        </div>
-                        <span className={`text-xs font-semibold ${
-                          perf.currentPosition.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                        }`}>
-                          {perf.currentPosition.unrealizedPnL >= 0 ? '+' : ''}
-                          {perf.currentPosition.unrealizedPnL.toFixed(2)} USDT
-                          ({perf.currentPosition.unrealizedPnLPercent.toFixed(2)}%)
+                  {/* Performance Metrics - Single row with left/right columns */}
+                  <div className="flex items-start justify-between gap-6 min-w-[300px] w-full">
+                    {/* LEFT: Trades + Win Rate */}
+                    <div className="flex flex-col gap-1.5 basis-1/3">
+                      {/* Trades */}
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs text-gray-400">Trades:</span>
+                        <span className="text-sm text-white">
+                          {perf.winningTrades}/{perf.totalTrades}
                         </span>
                       </div>
-                    )}
+
+                      {/* Win Rate (moved from right) */}
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs text-gray-400">Win Rate:</span>
+                        <span className={`text-sm font-semibold ${
+                          perf.winRate >= 50 ? 'text-green-400' : 'text-orange-400'
+                        }`}>
+                          {perf.winRate.toFixed(1)}%
+                        </span>
+                      </div>
+
+                      {/* Unrealized row moved below to span full width */}
+                    </div>
+
+                    {/* RIGHT: Position (top) + Total P&L (bottom) */}
+                    <div className="flex flex-col gap-1.5 basis-2/3">
+                      {/* Position (moved from left) */}
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs text-gray-400">Position:</span>
+                        <span className={`text-sm font-semibold ${
+                          perf.currentPosition.type === 'LONG' ? 'text-green-400' :
+                          perf.currentPosition.type === 'SHORT' ? 'text-red-400' :
+                          'text-gray-400'
+                        }`}>
+                          {perf.currentPosition.type}
+                        </span>
+                      </div>
+
+                      {/* Total PnL */}
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs text-gray-400">Total P&L:</span>
+                        <span className={`text-sm font-bold ${
+                          perf.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          {perf.totalPnL >= 0 ? '+' : ''}{perf.totalPnL.toFixed(2)} USDT
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                    </>
+
+                  {/* Unrealized P&L - Full width under the row */}
+                  {perf.currentPosition.type !== 'NONE' && (
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-700 w-full mt-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-gray-400">Unrealized:</span>
+                        <div className={`w-1.5 h-1.5 rounded-full ${
+                          perf.currentPosition.type === 'LONG' ? 'bg-green-500' : 'bg-red-500'
+                        }`}></div>
+                      </div>
+                      <span className={`text-xs font-semibold ${
+                        perf.currentPosition.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {perf.currentPosition.unrealizedPnL >= 0 ? '+' : ''}
+                        {perf.currentPosition.unrealizedPnL.toFixed(2)} USDT
+                        ({perf.currentPosition.unrealizedPnLPercent.toFixed(2)}%)
+                      </span>
+                    </div>
+                  )}
+                </>
                   )}
                 </>
               )}
