@@ -19,8 +19,29 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
   const [showEMA200, setShowEMA200] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Get strategy color based on type
-  const getStrategyColor = (strategyType: string) => {
+  // Get strategy color based on type (with dynamic color for CUSTOM)
+  const getStrategyColor = (strategyType: string, customColor?: string) => {
+    // For CUSTOM strategies with predefined color map
+    if (strategyType === 'CUSTOM' && customColor) {
+      const colorMap: Record<string, any> = {
+        emerald: { bg: 'bg-emerald-500', text: 'text-emerald-400', border: 'border-emerald-400', accent: 'bg-emerald-400' },
+        rose: { bg: 'bg-rose-500', text: 'text-rose-400', border: 'border-rose-400', accent: 'bg-rose-400' },
+        indigo: { bg: 'bg-indigo-500', text: 'text-indigo-400', border: 'border-indigo-400', accent: 'bg-indigo-400' },
+        violet: { bg: 'bg-violet-500', text: 'text-violet-400', border: 'border-violet-400', accent: 'bg-violet-400' },
+        amber: { bg: 'bg-amber-500', text: 'text-amber-400', border: 'border-amber-400', accent: 'bg-amber-400' },
+        lime: { bg: 'bg-lime-500', text: 'text-lime-400', border: 'border-lime-400', accent: 'bg-lime-400' },
+        sky: { bg: 'bg-sky-500', text: 'text-sky-400', border: 'border-sky-400', accent: 'bg-sky-400' },
+        fuchsia: { bg: 'bg-fuchsia-500', text: 'text-fuchsia-400', border: 'border-fuchsia-400', accent: 'bg-fuchsia-400' },
+        pink: { bg: 'bg-pink-500', text: 'text-pink-400', border: 'border-pink-400', accent: 'bg-pink-400' },
+        red: { bg: 'bg-red-500', text: 'text-red-400', border: 'border-red-400', accent: 'bg-red-400' },
+        green: { bg: 'bg-green-500', text: 'text-green-400', border: 'border-green-400', accent: 'bg-green-400' },
+        slate: { bg: 'bg-slate-500', text: 'text-slate-400', border: 'border-slate-400', accent: 'bg-slate-400' },
+        stone: { bg: 'bg-stone-500', text: 'text-stone-400', border: 'border-stone-400', accent: 'bg-stone-400' }
+      };
+      
+      return colorMap[customColor] || colorMap.fuchsia;
+    }
+    
     switch (strategyType) {
       case 'RSI_EMA':
         return { bg: 'bg-blue-500', text: 'text-blue-400', border: 'border-blue-400', accent: 'bg-blue-400' };
@@ -32,6 +53,10 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
         return { bg: 'bg-teal-500', text: 'text-teal-400', border: 'border-teal-400', accent: 'bg-teal-400' };
       case 'TREND_FOLLOWER':
         return { bg: 'bg-cyan-500', text: 'text-cyan-400', border: 'border-cyan-400', accent: 'bg-cyan-400' };
+      case 'ATR_PULLBACK':
+        return { bg: 'bg-yellow-500', text: 'text-yellow-400', border: 'border-yellow-400', accent: 'bg-yellow-400' };
+      case 'CUSTOM':
+        return { bg: 'bg-fuchsia-500', text: 'text-fuchsia-400', border: 'border-fuchsia-400', accent: 'bg-fuchsia-400' };
       default:
         return { bg: 'bg-blue-500', text: 'text-blue-400', border: 'border-blue-400', accent: 'bg-blue-400' };
     }
@@ -39,7 +64,8 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
 
   // Get current strategy data
   const currentStrategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
-  const strategyColors = currentStrategy ? getStrategyColor(currentStrategy.strategyType) : { bg: 'bg-blue-600', text: 'text-blue-400', border: 'border-blue-400', accent: 'bg-blue-400' };
+  const customColor = currentStrategy?.strategyType === 'CUSTOM' ? currentStrategy.customConfig?.color : undefined;
+  const strategyColors = currentStrategy ? getStrategyColor(currentStrategy.strategyType, customColor) : { bg: 'bg-blue-600', text: 'text-blue-400', border: 'border-blue-400', accent: 'bg-blue-400' };
 
   // Calculate TP/SL prices and time remaining for selected strategy
   const getTradeLevels = () => {

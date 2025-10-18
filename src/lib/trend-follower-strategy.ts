@@ -25,7 +25,7 @@ export const trendFollowerConfig: TrendFollowerConfig = {
   trendPeriod: 50,                   // EMA 50 pour la tendance
   trendConfirmationCandles: 3,       // Confirmation sur 3 bougies consécutives
   simulationMode: true,
-  positionSize: 0.001
+  positionSize: 0.05 // 5% du capital (Balanced)
 };
 
 export class TrendFollowerStrategy {

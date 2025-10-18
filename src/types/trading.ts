@@ -61,15 +61,115 @@ export interface CompletedTrade {
 export interface StrategyState {
   candles: Candle[];
   currentPrice: number;
+  
+  // Basic indicators (legacy)
   rsi: number;
   ema12: number;
   ema26: number;
   ema50: number;
   ema200: number;
-  // Binance-style moving averages
   ma7: number;
   ma25: number;
   ma99: number;
+  
+  // All IndicatorEngine values (for CUSTOM strategies)
+  // Moving Averages
+  ema100?: number;
+  sma7?: number;
+  sma25?: number;
+  sma50?: number;
+  sma99?: number;
+  sma200?: number;
+  
+  // Momentum Indicators
+  rsi9?: number;
+  rsi21?: number;
+  
+  // MACD
+  macd?: number;
+  macdSignal?: number;
+  macdHistogram?: number;
+  
+  // Bollinger Bands
+  bbUpper?: number;
+  bbMiddle?: number;
+  bbLower?: number;
+  bbWidth?: number;
+  bbPercent?: number;
+  
+  // Volatility
+  atr?: number;
+  atr14?: number;
+  atr21?: number;
+  
+  // Stochastic
+  stochK?: number;
+  stochD?: number;
+  
+  // Trend Strength
+  adx?: number;
+  
+  // Others
+  cci?: number;
+  obv?: number;
+  
+  // Volume Analysis
+  volumeSMA20?: number;
+  volumeRatio?: number;
+  
+  // Price Position
+  priceChangePercent?: number;
+  priceChange24h?: number;
+  vwap?: number;
+  
+  // Trend Detection (Boolean)
+  isBullishTrend?: boolean;
+  isBearishTrend?: boolean;
+  isUptrend?: boolean;
+  isDowntrend?: boolean;
+  // Trend Confirmation (Boolean)
+  isUptrendConfirmed3?: boolean;
+  isDowntrendConfirmed3?: boolean;
+  // Trend Reversal (Boolean)
+  isTrendReversalUp?: boolean;
+  isTrendReversalDown?: boolean;
+  
+  // Momentum (Boolean)
+  isOversold?: boolean;
+  isOverbought?: boolean;
+  
+  // MACD Signals (Boolean)
+  isMACDBullish?: boolean;
+  isMACDBearish?: boolean;
+  isMACDCrossoverBullish?: boolean;
+  isMACDCrossoverBearish?: boolean;
+  isEMAFastSlowBullCross?: boolean;
+  isEMAFastSlowBearCross?: boolean;
+  isPriceCrossedAboveEMA50?: boolean;
+  isPriceCrossedBelowEMA50?: boolean;
+  
+  // Volume (Boolean)
+  isHighVolume?: boolean;
+  isLowVolume?: boolean;
+  isPriceAboveVWAP?: boolean;
+  isPriceBelowVWAP?: boolean;
+  isNearVWAP?: boolean;
+  
+  // Bollinger Bands Signals (Boolean)
+  isNearBBLower?: boolean;
+  isNearBBUpper?: boolean;
+  isBelowBBLower?: boolean;
+  isAboveBBUpper?: boolean;
+  
+  // Candle Patterns (Boolean)
+  isBullishCandle?: boolean;
+  isBearishCandle?: boolean;
+  isBullishEngulfing?: boolean;
+  isBearishEngulfing?: boolean;
+  isDoji?: boolean;
+  isHammer?: boolean;
+  isShootingStar?: boolean;
+  
   lastSignal: TradingSignal | null;
   signals: TradingSignal[];
   isConnected: boolean;
@@ -127,7 +227,7 @@ export interface StrategyConfig {
 
 export interface StrategyPerformance {
   strategyName: string;
-  strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK';
+  strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM';
   totalPnL: number;
   totalTrades: number;
   winningTrades: number;
@@ -144,6 +244,8 @@ export interface StrategyPerformance {
     stopLossPercent?: number | null;
     maxPositionTime?: number | null;
   };
+  // CUSTOM strategy full config (for displaying indicators and color)
+  customConfig?: any; // CustomStrategyConfig from custom-strategy.ts
   // Strategy-specific flags
   isBullishCrossover?: boolean; // Momentum Crossover
   isBearishCrossover?: boolean; // Momentum Crossover

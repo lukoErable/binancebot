@@ -1,5 +1,6 @@
 'use client';
 
+import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { StrategyPerformance, StrategyState } from '@/types/trading';
 import { useEffect, useState } from 'react';
 import BinanceChart from './BinanceChart';
@@ -13,6 +14,7 @@ import {
   StrategyPanelSkeleton,
   TradingInfoSkeleton
 } from './SkeletonLoader';
+import StrategyBuilder from './StrategyBuilder';
 import StrategyPanel from './StrategyPanel';
 import TradingHistory from './TradingHistory';
 
@@ -31,6 +33,8 @@ export default function Dashboard() {
   const [strategyPerformances, setStrategyPerformances] = useState<StrategyPerformance[]>([]);
   const [localConfigCache, setLocalConfigCache] = useState<Record<string, { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }>>({});
   const [selectedStrategy, setSelectedStrategy] = useState<string>('GLOBAL'); // 'GLOBAL' or strategy name
+  const [showStrategyBuilder, setShowStrategyBuilder] = useState(false);
+  const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
   const startDataStream = async (timeframe?: string, trading?: boolean) => {
     const tf = timeframe || selectedTimeframe;
@@ -98,6 +102,116 @@ export default function Dashboard() {
     // Refresh is now handled via localConfigCache + SSE
     // No need for manual API call as the graph uses local cache immediately
     console.log('Config refresh triggered (using local cache)');
+  };
+
+  const handleSaveStrategy = async (config: CustomStrategyConfig) => {
+    try {
+      const response = await fetch('/api/custom-strategy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        console.log(`✅ Strategy "${config.name}" created successfully!`);
+        setShowStrategyBuilder(false);
+        // Reload to see the new strategy
+        window.location.reload();
+      } else {
+        console.error(`❌ Error: ${data.error || 'Failed to create strategy'}`);
+      }
+    } catch (error) {
+      console.error('Error creating strategy:', error);
+    }
+  };
+
+  const handleGenerateAIStrategy = async () => {
+    setIsGeneratingAI(true);
+    
+    try {
+      // Choisir aléatoirement le type de stratégie
+      const types: ('aggressive' | 'balanced' | 'conservative')[] = ['aggressive', 'balanced', 'conservative'];
+      const randomType = types[Math.floor(Math.random() * types.length)];
+      
+      console.log(`🤖 Generating ${randomType} strategy with AI...`);
+      
+      // Préparer le contexte des stratégies existantes
+      const existingStrategies = strategyPerformances.map(perf => {
+        // Extraire les conditions principales si disponibles
+        const criteria = getCriteriaForStrategy?.(perf.strategyType as any, perf);
+        
+        // Extract color from customConfig for CUSTOM strategies
+        const color = perf.strategyType === 'CUSTOM' && perf.customConfig?.color 
+          ? perf.customConfig.color 
+          : undefined;
+        
+        return {
+          name: perf.strategyName,
+          type: perf.strategyType,
+          focus: getStrategyFocus(perf.strategyType),
+          conditions: criteria ? Object.keys(criteria.long).filter(k => !k.includes('Status')).join(', ') : 'N/A',
+          color: color
+        };
+      });
+      
+      // Générer la stratégie avec l'IA
+      const aiResponse = await fetch('/api/ai-strategy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: '', // Pas d'instructions custom
+          type: randomType,
+          existingStrategies // Envoyer les stratégies existantes
+        })
+      });
+
+      let aiData;
+      try {
+        aiData = await aiResponse.json();
+      } catch (jsonError: any) {
+        console.error('❌ Failed to parse AI response:', jsonError);
+        throw new Error('Invalid response from AI API');
+      }
+
+      if (!aiResponse.ok) {
+        console.error('❌ AI API error:', aiData.error);
+        throw new Error(aiData.error || 'Failed to generate strategy');
+      }
+
+      const generatedStrategy = aiData.strategy;
+      
+      if (!generatedStrategy || !generatedStrategy.name) {
+        console.error('❌ Invalid strategy structure:', generatedStrategy);
+        throw new Error('AI generated invalid strategy');
+      }
+      
+      console.log('✅ Strategy generated:', generatedStrategy.name);
+
+      // Sauvegarder automatiquement la stratégie
+      const saveResponse = await fetch('/api/custom-strategy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(generatedStrategy)
+      });
+
+      const saveData = await saveResponse.json();
+
+      if (saveResponse.ok) {
+        console.log(`✨ AI Strategy "${generatedStrategy.name}" created successfully!`);
+        console.log(`📊 Type: ${randomType.toUpperCase()}`);
+        console.log(`💡 ${generatedStrategy.description}`);
+        // Reload to see the new strategy
+        window.location.reload();
+      } else {
+        console.error(`❌ Error saving: ${saveData.error || 'Failed to save strategy'}`);
+      }
+    } catch (error: any) {
+      console.error('❌ Error generating AI strategy:', error);
+    } finally {
+      setIsGeneratingAI(false);
+    }
   };
 
   const changeTimeframe = async (timeframe: string) => {
@@ -197,7 +311,7 @@ export default function Dashboard() {
   // Get criteria for a specific strategy type
   type CriteriaReturn = { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number; longReady?: boolean; shortReady?: boolean };
 
-  const getCriteriaForStrategy = (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK', strategyMetrics: StrategyPerformance): CriteriaReturn | null => {
+  const getCriteriaForStrategy = (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM', strategyMetrics: StrategyPerformance): CriteriaReturn | null => {
     if (!state) return null;
 
     // Extract position from strategyMetrics
@@ -206,7 +320,7 @@ export default function Dashboard() {
 
     // Calculer le cooldown restant
     const now = Date.now();
-    const lastTradeTime = state.lastSignal?.timestamp || 0;
+    const lastTradeTime = strategyMetrics.lastSignal?.timestamp || 0;
     const cooldownPeriod = 5 * 60 * 1000; // 5 minutes
     const cooldownRemaining = Math.max(0, cooldownPeriod - (now - lastTradeTime));
     const cooldownPassed = cooldownRemaining === 0;
@@ -444,29 +558,27 @@ export default function Dashboard() {
       const priceDiffPercent = Math.abs((state.currentPrice - state.ema50) / state.ema50) * 100;
       const isCloseToEma = priceDiffPercent < 0.5; // Moins de 0.5% de différence = orange
       
-      // Critère 2 : Confirmation de tendance (simulée - approximation basée sur les dernières bougies)
-      // En réalité, la vraie confirmation est dans la stratégie avec 3 bougies consécutives
-      // Ici on simule : si le prix est bien au-dessus/en-dessous de l'EMA, on considère confirmé
-      const trendStrong = priceDiffPercent > 0.3; // Plus de 0.3% = tendance forte
-      const trendConfirmed = trendStrong;
+      // Critère 2 : Confirmation de tendance (réelle) = 3 clôtures consécutives au-dessus/au-dessous de l'EMA50
+      const trendConfirmedLong = !!state.isUptrendConfirmed3;
+      const trendConfirmedShort = !!state.isDowntrendConfirmed3;
       
       const criteria: CriteriaReturn = {
         strategyType: 'TREND_FOLLOWER' as const,
         long: {
           priceAboveEma: priceAboveEma50,
           priceAboveEmaStatus: getStatus(priceAboveEma50, isCloseToEma),
-          trendConfirmed: trendConfirmed && priceAboveEma50,
-          trendConfirmedStatus: getStatus(trendConfirmed && priceAboveEma50, !trendStrong && priceAboveEma50)
+          trendConfirmed: trendConfirmedLong && priceAboveEma50,
+          trendConfirmedStatus: getStatus(trendConfirmedLong && priceAboveEma50, !trendConfirmedLong && priceAboveEma50)
         },
         short: {
           priceBelowEma: priceBelowEma50,
           priceBelowEmaStatus: getStatus(priceBelowEma50, isCloseToEma),
-          trendConfirmed: trendConfirmed && priceBelowEma50,
-          trendConfirmedStatus: getStatus(trendConfirmed && priceBelowEma50, !trendStrong && priceBelowEma50)
+          trendConfirmed: trendConfirmedShort && priceBelowEma50,
+          trendConfirmedStatus: getStatus(trendConfirmedShort && priceBelowEma50, !trendConfirmedShort && priceBelowEma50)
         },
         cooldownRemaining: 0,
-        longReady: priceAboveEma50 && trendConfirmed,
-        shortReady: priceBelowEma50 && trendConfirmed
+        longReady: priceAboveEma50 && trendConfirmedLong,
+        shortReady: priceBelowEma50 && trendConfirmedShort
       };
       
       // Debug pour Trend Follower
@@ -475,7 +587,8 @@ export default function Dashboard() {
         ema50: state.ema50,
         priceAboveEma50,
         priceDiffPercent,
-        trendStrong,
+        trendConfirmedLong,
+        trendConfirmedShort,
         longStatus: criteria.long.priceAboveEmaStatus,
         longConfStatus: criteria.long.trendConfirmedStatus,
         shortStatus: criteria.short.priceBelowEmaStatus,
@@ -554,6 +667,160 @@ export default function Dashboard() {
       return criteria;
     }
 
+    // CUSTOM Strategy - Évaluer les conditions en temps réel
+    if (strategyType === 'CUSTOM') {
+      const hasNoPosition = position.type === 'NONE';
+      
+      // Extraire et évaluer les indicateurs depuis customConfig
+      const customConfig = (strategyMetrics as any).customConfig;
+      const longIndicators: Record<string, { value: boolean; status: string }> = {};
+      const shortIndicators: Record<string, { value: boolean; status: string }> = {};
+      
+      if (customConfig && state) {
+        // Helper pour évaluer une condition
+        const evaluateCondition = (cond: any): { met: boolean; close: boolean } => {
+          if (!cond || !cond.indicator) return { met: false, close: false };
+          
+          // Get indicator value from state (basic indicators only)
+          const indicatorValue = (state as any)[cond.indicator];
+          if (indicatorValue === undefined) return { met: false, close: false };
+          
+          if (cond.type === 'comparison') {
+            const val = indicatorValue;
+            const threshold = cond.value;
+            const margin = threshold * 0.1; // 10% margin for "close"
+            
+            switch (cond.operator) {
+              case 'GT':
+                return { 
+                  met: val > threshold, 
+                  close: val > threshold * 0.9 && val <= threshold 
+                };
+              case 'LT':
+                return { 
+                  met: val < threshold, 
+                  close: val < threshold * 1.1 && val >= threshold 
+                };
+              case 'GTE':
+                return { 
+                  met: val >= threshold, 
+                  close: val >= threshold * 0.9 && val < threshold 
+                };
+              case 'LTE':
+                return { 
+                  met: val <= threshold, 
+                  close: val <= threshold * 1.1 && val > threshold 
+                };
+              case 'EQ':
+                return { 
+                  met: Math.abs(val - threshold) < margin, 
+                  close: Math.abs(val - threshold) < margin * 2 
+                };
+              default:
+                return { met: false, close: false };
+            }
+          } else if (cond.type === 'boolean') {
+            // Proximity heuristics for boolean indicators to allow 'orange' state
+            const met = indicatorValue === cond.value;
+            let closeTo = false;
+            try {
+              // Price vs EMA50 proximity (~0.5%)
+              const price = (state as any).currentPrice as number | undefined;
+              const ema50 = (state as any).ema50 as number | undefined;
+              const ema200 = (state as any).ema200 as number | undefined;
+              const priceDiffPct = price && ema50 ? Math.abs((price - ema50) / (ema50 || 1)) : undefined;
+              const emaDiffPct = ema50 && ema200 ? Math.abs((ema50 - ema200) / (ema200 || 1)) : undefined;
+
+              // isUptrend / isDowntrend (price vs EMA50)
+              if (!met && (cond.indicator === 'isUptrend' || cond.indicator === 'isDowntrend')) {
+                closeTo = !!priceDiffPct && priceDiffPct < 0.005; // < 0.5%
+              }
+
+              // isBullishTrend / isBearishTrend (EMA50 vs EMA200)
+              if (!met && (cond.indicator === 'isBullishTrend' || cond.indicator === 'isBearishTrend')) {
+                closeTo = !!emaDiffPct && emaDiffPct < 0.005; // < 0.5%
+              }
+
+              // isUptrendConfirmed3 / isDowntrendConfirmed3
+              if (!met && cond.indicator === 'isUptrendConfirmed3') {
+                const isUp = !!(state as any).isUptrend;
+                closeTo = isUp && !!priceDiffPct && priceDiffPct < 0.005;
+              }
+              if (!met && cond.indicator === 'isDowntrendConfirmed3') {
+                const isDown = !!(state as any).isDowntrend;
+                closeTo = isDown && !!priceDiffPct && priceDiffPct < 0.005;
+              }
+            } catch {}
+            return { met, close: closeTo };
+          } else if (cond.type === 'range') {
+            const val = indicatorValue;
+            const inRange = val >= cond.min && val <= cond.max;
+            const closeToRange = val >= cond.min * 0.9 && val <= cond.max * 1.1;
+            return { met: inRange, close: !inRange && closeToRange };
+          }
+          
+          return { met: false, close: false };
+        };
+        
+        // Extract and evaluate indicators from conditions
+        const processConditions = (conditions: any, targetMap: Record<string, { value: boolean; status: string }>) => {
+          if (!conditions || !conditions.conditions) return;
+          
+          conditions.conditions.forEach((cond: any) => {
+            if (cond.type === 'comparison' || cond.type === 'boolean' || cond.type === 'range') {
+              if (cond.indicator && !targetMap[cond.indicator]) {
+                const result = evaluateCondition(cond);
+                targetMap[cond.indicator] = {
+                  value: result.met,
+                  status: result.met ? 'green' : result.close ? 'orange' : 'gray'
+                };
+              }
+            }
+            // Recursive for nested groups
+            if (cond.operator === 'AND' || cond.operator === 'OR' || cond.operator === 'NOT') {
+              processConditions(cond, targetMap);
+            }
+          });
+        };
+        
+        // Process long and short conditions
+        if (customConfig.longEntryConditions) {
+          processConditions(customConfig.longEntryConditions, longIndicators);
+        }
+        if (customConfig.shortEntryConditions) {
+          processConditions(customConfig.shortEntryConditions, shortIndicators);
+        }
+      }
+      
+      // Check if all conditions are met
+      const longAllMet = Object.values(longIndicators).every(ind => ind.value) && hasNoPosition && cooldownPassed;
+      const shortAllMet = Object.values(shortIndicators).every(ind => ind.value) && hasNoPosition && cooldownPassed;
+      
+      const criteria: CriteriaReturn = {
+        strategyType: 'CUSTOM' as const,
+        long: {
+          customIndicators: JSON.stringify(longIndicators), // Serialize for type compatibility
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 60000),
+          _customIndicatorsData: longIndicators as any // Hidden property for actual data
+        },
+        short: {
+          customIndicators: JSON.stringify(shortIndicators),
+          noPosition: hasNoPosition,
+          noPositionStatus: getStatus(hasNoPosition, false),
+          cooldownPassed: cooldownPassed,
+          cooldownPassedStatus: getStatus(cooldownPassed, cooldownRemaining > 0 && cooldownRemaining < 60000),
+          _customIndicatorsData: shortIndicators as any
+        },
+        cooldownRemaining: cooldownRemaining,
+        longReady: longAllMet,
+        shortReady: shortAllMet
+      };
+      return criteria;
+    }
+
     // Default: RSI + EMA Strategy
     const emaDiff = Math.abs(state.ema50 - state.ema200);
     const emaPercent = (emaDiff / state.ema200) * 100;
@@ -621,8 +888,43 @@ export default function Dashboard() {
     }
   };
 
+
   // Strategy color mapping
-  const getStrategyColor = (strategyType: string) => {
+  const getStrategyFocus = (strategyType: string): string => {
+    switch (strategyType) {
+      case 'RSI_EMA': return 'RSI + EMA trend (mean reversion)';
+      case 'MOMENTUM_CROSSOVER': return 'EMA crossovers (momentum)';
+      case 'VOLUME_MACD': return 'Volume + MACD (breakout)';
+      case 'BOLLINGER_BOUNCE': return 'Bollinger Bands (mean reversion)';
+      case 'TREND_FOLLOWER': return 'EMA50 trend following';
+      case 'ATR_PULLBACK': return 'ATR pullback in trend';
+      case 'CUSTOM': return 'Custom indicators';
+      default: return 'Unknown';
+    }
+  };
+
+  const getStrategyColor = (strategyType: string, customColor?: string) => {
+    // For CUSTOM strategies, use predefined color mapping
+    if (strategyType === 'CUSTOM' && customColor) {
+      const colorMap: Record<string, any> = {
+        emerald: { border: 'border-emerald-400', text: 'text-emerald-400', accent: 'bg-emerald-400', bgSelected: 'bg-emerald-950/40' },
+        rose: { border: 'border-rose-400', text: 'text-rose-400', accent: 'bg-rose-400', bgSelected: 'bg-rose-950/40' },
+        indigo: { border: 'border-indigo-400', text: 'text-indigo-400', accent: 'bg-indigo-400', bgSelected: 'bg-indigo-950/40' },
+        violet: { border: 'border-violet-400', text: 'text-violet-400', accent: 'bg-violet-400', bgSelected: 'bg-violet-950/40' },
+        amber: { border: 'border-amber-400', text: 'text-amber-400', accent: 'bg-amber-400', bgSelected: 'bg-amber-950/40' },
+        lime: { border: 'border-lime-400', text: 'text-lime-400', accent: 'bg-lime-400', bgSelected: 'bg-lime-950/40' },
+        sky: { border: 'border-sky-400', text: 'text-sky-400', accent: 'bg-sky-400', bgSelected: 'bg-sky-950/40' },
+        fuchsia: { border: 'border-fuchsia-400', text: 'text-fuchsia-400', accent: 'bg-fuchsia-400', bgSelected: 'bg-fuchsia-950/40' },
+        pink: { border: 'border-pink-400', text: 'text-pink-400', accent: 'bg-pink-400', bgSelected: 'bg-pink-950/40' },
+        red: { border: 'border-red-400', text: 'text-red-400', accent: 'bg-red-400', bgSelected: 'bg-red-950/40' },
+        green: { border: 'border-green-400', text: 'text-green-400', accent: 'bg-green-400', bgSelected: 'bg-green-950/40' },
+        slate: { border: 'border-slate-400', text: 'text-slate-400', accent: 'bg-slate-400', bgSelected: 'bg-slate-950/40' },
+        stone: { border: 'border-stone-400', text: 'text-stone-400', accent: 'bg-stone-400', bgSelected: 'bg-stone-950/40' }
+      };
+      
+      return colorMap[customColor] || colorMap.fuchsia; // Fallback to fuchsia
+    }
+    
     switch (strategyType) {
       case 'RSI_EMA':
         return {
@@ -645,13 +947,6 @@ export default function Dashboard() {
           accent: 'bg-orange-400',
           bgSelected: 'bg-orange-950/40'
         };
-      case 'NEURAL_SCALPER':
-        return {
-          border: 'border-pink-400',
-          text: 'text-pink-400',
-          accent: 'bg-pink-400',
-          bgSelected: 'bg-pink-950/40'
-        };
       case 'BOLLINGER_BOUNCE':
         return {
           border: 'border-teal-400',
@@ -665,6 +960,21 @@ export default function Dashboard() {
           text: 'text-cyan-400',
           accent: 'bg-cyan-400',
           bgSelected: 'bg-cyan-950/40'
+        };
+      case 'ATR_PULLBACK':
+        return {
+          border: 'border-yellow-400',
+          text: 'text-yellow-400',
+          accent: 'bg-yellow-400',
+          bgSelected: 'bg-yellow-950/40'
+        };
+      case 'CUSTOM':
+        // Fallback for CUSTOM without color
+        return {
+          border: 'border-fuchsia-400',
+          text: 'text-fuchsia-400',
+          accent: 'bg-fuchsia-400',
+          bgSelected: 'bg-fuchsia-950/40'
         };
       default:
         return {
@@ -766,7 +1076,22 @@ export default function Dashboard() {
           ];
     }
     
-    // RSI_EMA
+    // CUSTOM Strategy - Extract statuses from customIndicators (indicators only, not cooldown/position)
+    if (criteria.strategyType === 'CUSTOM') {
+      const statuses: string[] = [];
+      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string }> | undefined;
+      if (indicators && typeof indicators === 'object') {
+        Object.values(indicators).forEach(data => {
+          if (data && typeof data === 'object' && 'status' in data) {
+            statuses.push(data.status);
+          }
+        });
+      }
+      // Note: cooldown and position are displayed separately, not as dots
+      return statuses;
+    }
+    
+    // RSI_EMA (default)
     return type === 'long'
       ? [
           criteriaData.emaTrendStatus as string,
@@ -821,7 +1146,22 @@ export default function Dashboard() {
         : [criteriaData.priceBelowEmaStatus as string, criteriaData.trendConfirmedStatus as string];
     }
     
-    // RSI + EMA
+    // CUSTOM Strategy - Extract statuses from customIndicators (indicators only, not cooldown/position)
+    if (criteria.strategyType === 'CUSTOM') {
+      const statuses: string[] = [];
+      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string }> | undefined;
+      if (indicators && typeof indicators === 'object') {
+        Object.values(indicators).forEach(data => {
+          if (data && typeof data === 'object' && 'status' in data) {
+            statuses.push(data.status);
+          }
+        });
+      }
+      // Note: cooldown and position are displayed separately, not as dots
+      return statuses;
+    }
+    
+    // RSI + EMA (default)
     return [
       criteriaData.emaTrendStatus as string,
       (criteriaData.rsiOversoldStatus || criteriaData.rsiOverboughtStatus) as string
@@ -831,6 +1171,56 @@ export default function Dashboard() {
   // Render criteria labels based on strategy type
   const renderCriteriaLabels = (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short', _allReady: boolean = false) => {
     const criteriaData = type === 'long' ? criteria.long : criteria.short;
+    
+    // CUSTOM Strategy - Afficher les indicateurs avec statuts dynamiques
+    if (criteria.strategyType === 'CUSTOM') {
+      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string }> | undefined;
+      
+      if (!indicators || Object.keys(indicators).length === 0) {
+        return (
+          <span className="flex items-center gap-1 text-gray-500">
+            <span className="w-1 h-1 rounded-full bg-gray-500"></span>
+            No conditions
+          </span>
+        );
+      }
+      
+      const indicatorEntries = Object.entries(indicators);
+      // Display all indicators (no limit) since we have dots for each
+      const displayedIndicators = indicatorEntries;
+      const remainingCount = 0; // No remaining since we show all
+      
+      return (
+        <>
+          {displayedIndicators.map(([name, data], idx) => {
+            const statusColor = 
+              data.status === 'green' ? 'text-green-400' :
+              data.status === 'orange' ? 'text-orange-400' :
+              'text-gray-500';
+            
+            return (
+              <span 
+                key={idx}
+                className={`flex items-center gap-1 ${statusColor}`}
+                title={`${name}: ${data.value ? '✓ Met' : '✗ Not met'}`}
+              >
+                <span className={`w-1 h-1 rounded-full ${getStatusClass(data.status)}`}></span>
+                {name}
+              </span>
+            );
+          })}
+          {remainingCount > 0 && (
+            <span 
+              className="flex items-center gap-1 text-cyan-400"
+              title={`+ ${remainingCount} more indicators`}
+            >
+              <span className="w-1 h-1 rounded-full bg-cyan-500"></span>
+              +{remainingCount}
+            </span>
+          )}
+        </>
+      );
+    }
     
     if (criteria.strategyType === 'MOMENTUM_CROSSOVER') {
       // Momentum Crossover criteria
@@ -1295,10 +1685,37 @@ export default function Dashboard() {
     const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
     if (!selectedStrategyData) return {};
     
+    // Dynamic background for CUSTOM based on color mapping
+    if (selectedStrategyData.strategyType === 'CUSTOM') {
+      const color = selectedStrategyData.customConfig?.color as string | undefined;
+      const bgMap: Record<string, string> = {
+        emerald: 'rgb(2, 44, 34)',      // very dark emerald
+        rose: 'rgb(76, 5, 25)',         // very dark rose
+        indigo: 'rgb(30, 27, 75)',      // very dark indigo
+        violet: 'rgb(46, 16, 101)',     // very dark violet
+        amber: 'rgb(69, 51, 0)',        // very dark amber
+        lime: 'rgb(26, 46, 5)',         // very dark lime
+        sky: 'rgb(7, 28, 61)',          // very dark sky
+        fuchsia: 'rgb(76, 5, 82)',      // very dark fuchsia
+        pink: 'rgb(76, 5, 45)',         // very dark pink
+        red: 'rgb(69, 10, 10)',         // very dark red
+        green: 'rgb(3, 35, 20)',        // very dark green
+        slate: 'rgb(15, 23, 42)',       // very dark slate
+        stone: 'rgb(28, 25, 23)'        // very dark stone
+      };
+      if (color && bgMap[color]) {
+        return { backgroundColor: bgMap[color] };
+      }
+      return { backgroundColor: 'rgb(112, 26, 117)' }; // fallback fuchsia
+    }
+    
     switch (selectedStrategyData.strategyType) {
       case 'RSI_EMA': return { backgroundColor: 'rgb(23, 37, 84)' }; // Bleu très foncé
       case 'MOMENTUM_CROSSOVER': return { backgroundColor: 'rgb(46, 16, 101)' }; // Violet très foncé
       case 'VOLUME_MACD': return { backgroundColor: 'rgb(67, 20, 7)' }; // Orange très foncé
+      case 'BOLLINGER_BOUNCE': return { backgroundColor: 'rgb(6, 78, 59)' }; // Teal très foncé
+      case 'TREND_FOLLOWER': return { backgroundColor: 'rgb(8, 51, 68)' }; // Cyan très foncé
+      case 'ATR_PULLBACK': return { backgroundColor: 'rgb(69, 51, 0)' }; // Yellow très foncé
       default: return {};
     }
   };
@@ -1338,7 +1755,8 @@ export default function Dashboard() {
                 ) : (() => {
                   const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
                   if (!selectedStrategyData) return null;
-                  const colors = getStrategyColor(selectedStrategyData.strategyType);
+                  const customColor = selectedStrategyData.strategyType === 'CUSTOM' ? selectedStrategyData.customConfig?.color : undefined;
+                  const colors = getStrategyColor(selectedStrategyData.strategyType, customColor);
                   
                   return (
                     <div className={`px-4 py-1.5 bg-gray-900 border-2 ${colors.border} rounded flex items-center gap-3`}>
@@ -1375,7 +1793,7 @@ export default function Dashboard() {
             )}
           </div>
           
-          {/* Right: Monitoring */}
+          {/* Right: Monitoring Status */}
           <div className="flex items-center justify-end gap-4">
             {isConnecting && (
               <div className="bg-yellow-600 text-white px-4 py-2 rounded text-sm font-medium">
@@ -1637,6 +2055,25 @@ export default function Dashboard() {
               getCriteriaForStrategy={getCriteriaForStrategy}
               getStatusesArray={getStatusesArray}
               renderCriteriaLabels={renderCriteriaLabels}
+              onGenerateAIStrategy={handleGenerateAIStrategy}
+              isGeneratingAI={isGeneratingAI}
+              onCreateStrategy={() => setShowStrategyBuilder(true)}
+              indicatorData={state ? {
+                price: state.currentPrice,
+                rsi: state.rsi,
+                ema12: state.ema12,
+                ema26: state.ema26,
+                ema50: state.ema50,
+                ema200: state.ema200,
+                ma7: state.ma7,
+                ma25: state.ma25,
+                ma99: state.ma99,
+                volume: state.candles && state.candles.length > 0 ? state.candles[state.candles.length - 1].volume : undefined
+              } : null}
+              onDeleteStrategy={async (strategyName) => {
+                // Cette fonction sera appelée depuis StrategyPanel après confirmation
+                console.log(`Deleting strategy: ${strategyName}`);
+              }}
             />
           )}
 
@@ -1688,6 +2125,14 @@ export default function Dashboard() {
           <h2 className="text-2xl font-semibold mb-2 text-white">Bot en attente</h2>
           <p className="text-gray-400">Cliquez sur &quot;Start Bot&quot; pour commencer le trading</p>
         </div>
+      )}
+
+      {/* Strategy Builder Modal */}
+      {showStrategyBuilder && (
+        <StrategyBuilder
+          onSave={handleSaveStrategy}
+          onClose={() => setShowStrategyBuilder(false)}
+        />
       )}
     </div>
   );

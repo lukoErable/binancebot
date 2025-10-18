@@ -1,6 +1,8 @@
 import { Candle, StrategyPerformance } from '@/types/trading';
 import { AtrTrendPullbackStrategy, atrPullbackDefaultConfig } from './atr-pullback-strategy';
 import { BollingerBounceStrategy, defaultBollingerBounceConfig } from './bollinger-bounce-strategy';
+import { CustomStrategy } from './custom-strategy';
+import CustomStrategyRepository from './db/custom-strategy-repository';
 import StrategyRepository from './db/strategy-repository';
 import TradeRepository from './db/trade-repository';
 import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
@@ -14,8 +16,8 @@ import { VolumeMACDStrategy, volumeMACDStrategyConfig } from './volume-macd-stra
  */
 export class StrategyManager {
   private strategies: Map<string, {
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy;
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK';
+    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | CustomStrategy;
+    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM';
     isActive: boolean;
   }>;
   private savingSignals: Set<string> = new Set(); // Verrou pour éviter les sauvegardes multiples
@@ -41,6 +43,9 @@ export class StrategyManager {
       false,
       { profitTargetPercent: atrPullbackDefaultConfig.profitTargetPercent, stopLossPercent: atrPullbackDefaultConfig.stopLossPercent, maxPositionTime: Math.floor(atrPullbackDefaultConfig.maxPositionTime / (60 * 1000)) }
     ).catch(() => {});
+
+    // Load custom strategies from database
+    this.loadCustomStrategies();
   }
 
   /**
@@ -112,12 +117,44 @@ export class StrategyManager {
   }
 
   /**
+   * Load custom strategies from database
+   */
+  private async loadCustomStrategies(): Promise<void> {
+    try {
+      const customConfigs = await CustomStrategyRepository.getAllCustomStrategies();
+      
+      for (const config of customConfigs) {
+        console.log(`📦 Loading custom strategy: ${config.name}`);
+        const strategy = new CustomStrategy(config);
+        // Use isActive from DB, default to true if not specified
+        const isActive = config.isActive !== undefined ? config.isActive : true;
+        this.addStrategy(config.name, strategy, 'CUSTOM' as any, isActive);
+        
+        // Load trade history for custom strategy
+        try {
+          const trades = await TradeRepository.getTradesByStrategy(config.name, 100);
+          if (trades.length > 0 && 'restoreFromDatabase' in strategy) {
+            console.log(`📈 Loaded ${trades.length} signals for custom strategy ${config.name}`);
+            await (strategy as any).restoreFromDatabase(trades);
+          }
+        } catch (error) {
+          console.error(`❌ Error loading trades for custom strategy ${config.name}:`, error);
+        }
+      }
+      
+      console.log(`✅ Loaded ${customConfigs.length} custom strategies`);
+    } catch (error) {
+      console.error('❌ Error loading custom strategies:', error);
+    }
+  }
+
+  /**
    * Add a new strategy
    */
   addStrategy(
     name: string,
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy,
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK',
+    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | CustomStrategy,
+    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM',
     isActive: boolean = true
   ): void {
     this.strategies.set(name, { strategy, type, isActive });
@@ -315,9 +352,12 @@ export class StrategyManager {
         maxPositionTime: strategy.config.maxPositionTime ? strategy.config.maxPositionTime / (60 * 1000) : undefined
       } : undefined;
 
+      // For CUSTOM strategies, include the full config for UI display
+      const customConfig = strategyData.type === 'CUSTOM' && strategy.config ? strategy.config : undefined;
+
       performances.push({
         strategyName: name,
-        strategyType: strategyData.type,
+        strategyType: strategyData.type as 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM',
         totalPnL: positionInfo.totalPnL,
         totalTrades: positionInfo.totalTrades,
         winningTrades: positionInfo.winningTrades,
@@ -329,6 +369,7 @@ export class StrategyManager {
         isActive: strategyData.isActive,
         currentCapital: positionInfo.currentCapital || 100000,
         config: strategyConfig,
+        customConfig: customConfig, // Full custom strategy config
         // Include strategy-specific flags
         isBullishCrossover: 'isBullishCrossover' in positionInfo ? (positionInfo as any).isBullishCrossover : undefined,
         isBearishCrossover: 'isBearishCrossover' in positionInfo ? (positionInfo as any).isBearishCrossover : undefined,
@@ -367,7 +408,7 @@ export class StrategyManager {
   /**
    * Get strategy by name
    */
-  getStrategy(name: string): TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | undefined {
+  getStrategy(name: string): TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | CustomStrategy | undefined {
     return this.strategies.get(name)?.strategy;
   }
 
@@ -411,29 +452,38 @@ export class StrategyManager {
       // Reset strategy state by removing and re-adding it
       const strategyType = strategyData.type;
       const strategy = strategyData.strategy;
+      const wasActive = strategyData.isActive; // Conserver l'état actif
       
       // Remove old strategy
       this.strategies.delete(name);
       
-      // Re-add fresh strategy based on type
+      // Re-add fresh strategy based on type (keep active state)
       if (strategyType === 'RSI_EMA') {
         const { TradingStrategy, defaultStrategyConfig } = await import('./ema-rsi-strategy');
-        this.addStrategy(name, new TradingStrategy(defaultStrategyConfig), 'RSI_EMA', false);
+        this.addStrategy(name, new TradingStrategy(defaultStrategyConfig), 'RSI_EMA', wasActive);
       } else if (strategyType === 'MOMENTUM_CROSSOVER') {
         const { MomentumCrossoverStrategy, momentumStrategyConfig } = await import('./momentum-strategy');
-        this.addStrategy(name, new MomentumCrossoverStrategy(momentumStrategyConfig), 'MOMENTUM_CROSSOVER', false);
+        this.addStrategy(name, new MomentumCrossoverStrategy(momentumStrategyConfig), 'MOMENTUM_CROSSOVER', wasActive);
       } else if (strategyType === 'VOLUME_MACD') {
         const { VolumeMACDStrategy, volumeMACDStrategyConfig } = await import('./volume-macd-strategy');
-        this.addStrategy(name, new VolumeMACDStrategy(volumeMACDStrategyConfig), 'VOLUME_MACD', false);
+        this.addStrategy(name, new VolumeMACDStrategy(volumeMACDStrategyConfig), 'VOLUME_MACD', wasActive);
       } else if (strategyType === 'BOLLINGER_BOUNCE') {
         const { BollingerBounceStrategy, defaultBollingerBounceConfig } = await import('./bollinger-bounce-strategy');
-        this.addStrategy(name, new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', false);
+        this.addStrategy(name, new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', wasActive);
       } else if (strategyType === 'TREND_FOLLOWER') {
         const { TrendFollowerStrategy, trendFollowerConfig } = await import('./trend-follower-strategy');
-        this.addStrategy(name, new TrendFollowerStrategy(trendFollowerConfig, name), 'TREND_FOLLOWER', false);
+        this.addStrategy(name, new TrendFollowerStrategy(trendFollowerConfig, name), 'TREND_FOLLOWER', wasActive);
       } else if (strategyType === 'ATR_PULLBACK') {
         const { AtrTrendPullbackStrategy, atrPullbackDefaultConfig } = await import('./atr-pullback-strategy');
-        this.addStrategy(name, new AtrTrendPullbackStrategy(atrPullbackDefaultConfig), 'ATR_PULLBACK', false);
+        this.addStrategy(name, new AtrTrendPullbackStrategy(atrPullbackDefaultConfig), 'ATR_PULLBACK', wasActive);
+      } else if (strategyType === 'CUSTOM') {
+        // For CUSTOM strategies, reload from database
+        const { CustomStrategyRepository } = await import('./db/custom-strategy-repository');
+        const customConfig = await CustomStrategyRepository.loadCustomStrategy(name);
+        if (customConfig) {
+          const { CustomStrategy } = await import('./custom-strategy');
+          this.addStrategy(name, new CustomStrategy(customConfig), 'CUSTOM', wasActive);
+        }
       }
       
       console.log(`✅ Strategy "${name}" has been reset to initial state`);

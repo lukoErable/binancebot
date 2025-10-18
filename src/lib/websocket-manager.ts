@@ -2,6 +2,7 @@ import { BinanceKlineData, Candle, StrategyPerformance, StrategyState } from '@/
 import { EMA, RSI } from 'technicalindicators';
 import WebSocket from 'ws';
 import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
+import { IndicatorEngine } from './indicator-engine';
 import { StrategyManager } from './strategy-manager';
 
 // Global strategyManager instance for access from API routes
@@ -16,6 +17,7 @@ export class BinanceWebSocketManager {
   private candles: Candle[] = [];
   private strategy: TradingStrategy;
   private strategyManager: StrategyManager;
+  private indicatorEngine: IndicatorEngine;
   private state: StrategyState;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
@@ -31,6 +33,7 @@ export class BinanceWebSocketManager {
     this.tradingMode = tradingMode;
     this.strategy = new TradingStrategy(defaultStrategyConfig);
     this.strategyManager = new StrategyManager();
+    this.indicatorEngine = new IndicatorEngine();
     globalStrategyManager = this.strategyManager; // Expose globally
     this.onStateUpdate = onStateUpdate;
     this.state = {
@@ -256,6 +259,9 @@ export class BinanceWebSocketManager {
       this.isAnalyzing = false;
     }
     
+    // Calculate ALL indicators using IndicatorEngine
+    const indicators = this.indicatorEngine.calculate(this.candles);
+    
     // Get the best performing strategy for display
     const performances = this.strategyManager.getAllPerformances();
     const bestStrategyData = this.strategyManager.getBestStrategy();
@@ -279,7 +285,7 @@ export class BinanceWebSocketManager {
         this.state.lastSignal = signal;
       }
       
-      // Toujours mettre à jour les indicateurs
+      // Toujours mettre à jour les indicateurs basiques (legacy)
       this.state.rsi = signal.rsi;
       this.state.ema50 = signal.ema50;
       this.state.ema200 = signal.ema200;
@@ -287,19 +293,87 @@ export class BinanceWebSocketManager {
       this.state.ma25 = signal.ma25;
       this.state.ma99 = signal.ma99;
       this.state.currentPrice = signal.price;
-      
-      // Update position information from best strategy
-      this.state.currentPosition = bestStrategy ? bestStrategy.currentPosition : this.state.currentPosition;
-      this.state.totalPnL = bestStrategy ? bestStrategy.totalPnL : this.state.totalPnL;
-      this.state.totalTrades = bestStrategy ? bestStrategy.totalTrades : this.state.totalTrades;
-      this.state.winningTrades = bestStrategy ? bestStrategy.winningTrades : this.state.winningTrades;
-      
-      // Update state with full chart data
-      this.updateState();
-    } else {
-      // Always calculate indicators directly when no strategy signal
-      this.calculateAndUpdateIndicators();
     }
+    
+    // Update state with ALL indicators from IndicatorEngine
+    this.state.ema12 = indicators.ema12;
+    this.state.ema26 = indicators.ema26;
+    this.state.ema50 = indicators.ema50;
+    this.state.ema100 = indicators.ema100;
+    this.state.ema200 = indicators.ema200;
+    this.state.sma7 = indicators.sma7;
+    this.state.sma25 = indicators.sma25;
+    this.state.sma50 = indicators.sma50;
+    this.state.sma99 = indicators.sma99;
+    this.state.sma200 = indicators.sma200;
+    this.state.rsi = indicators.rsi;
+    this.state.rsi9 = indicators.rsi9;
+    this.state.rsi21 = indicators.rsi21;
+    this.state.macd = indicators.macd;
+    this.state.macdSignal = indicators.macdSignal;
+    this.state.macdHistogram = indicators.macdHistogram;
+    this.state.bbUpper = indicators.bbUpper;
+    this.state.bbMiddle = indicators.bbMiddle;
+    this.state.bbLower = indicators.bbLower;
+    this.state.bbWidth = indicators.bbWidth;
+    this.state.bbPercent = indicators.bbPercent;
+    this.state.atr = indicators.atr;
+    this.state.atr14 = indicators.atr14;
+    this.state.atr21 = indicators.atr21;
+    this.state.stochK = indicators.stochK;
+    this.state.stochD = indicators.stochD;
+    this.state.adx = indicators.adx;
+    this.state.cci = indicators.cci;
+    this.state.obv = indicators.obv;
+    this.state.volumeSMA20 = indicators.volumeSMA20;
+    this.state.volumeRatio = indicators.volumeRatio;
+    this.state.priceChangePercent = indicators.priceChangePercent;
+    this.state.priceChange24h = indicators.priceChange24h;
+    this.state.vwap = indicators.vwap;
+    this.state.isBullishTrend = indicators.isBullishTrend;
+    this.state.isBearishTrend = indicators.isBearishTrend;
+    this.state.isUptrend = indicators.isUptrend;
+    this.state.isDowntrend = indicators.isDowntrend;
+    this.state.isUptrendConfirmed3 = indicators.isUptrendConfirmed3;
+    this.state.isDowntrendConfirmed3 = indicators.isDowntrendConfirmed3;
+    this.state.isTrendReversalUp = indicators.isTrendReversalUp;
+    this.state.isTrendReversalDown = indicators.isTrendReversalDown;
+    this.state.isOversold = indicators.isOversold;
+    this.state.isOverbought = indicators.isOverbought;
+    this.state.isMACDBullish = indicators.isMACDBullish;
+    this.state.isMACDBearish = indicators.isMACDBearish;
+    this.state.isMACDCrossoverBullish = indicators.isMACDCrossoverBullish;
+    this.state.isMACDCrossoverBearish = indicators.isMACDCrossoverBearish;
+    this.state.isEMAFastSlowBullCross = indicators.isEMAFastSlowBullCross;
+    this.state.isEMAFastSlowBearCross = indicators.isEMAFastSlowBearCross;
+    this.state.isPriceCrossedAboveEMA50 = indicators.isPriceCrossedAboveEMA50;
+    this.state.isPriceCrossedBelowEMA50 = indicators.isPriceCrossedBelowEMA50;
+    this.state.isHighVolume = indicators.isHighVolume;
+    this.state.isLowVolume = indicators.isLowVolume;
+    this.state.isPriceAboveVWAP = indicators.isPriceAboveVWAP;
+    this.state.isPriceBelowVWAP = indicators.isPriceBelowVWAP;
+    this.state.isNearVWAP = indicators.isNearVWAP;
+    this.state.isNearBBLower = indicators.isNearBBLower;
+    this.state.isNearBBUpper = indicators.isNearBBUpper;
+    this.state.isBelowBBLower = indicators.isBelowBBLower;
+    this.state.isAboveBBUpper = indicators.isAboveBBUpper;
+    this.state.isBullishCandle = indicators.isBullishCandle;
+    this.state.isBearishCandle = indicators.isBearishCandle;
+    this.state.isBullishEngulfing = indicators.isBullishEngulfing;
+    this.state.isBearishEngulfing = indicators.isBearishEngulfing;
+    this.state.isDoji = indicators.isDoji;
+    this.state.isHammer = indicators.isHammer;
+    this.state.isShootingStar = indicators.isShootingStar;
+    this.state.currentPrice = indicators.price;
+    
+    // Update position information from best strategy
+    this.state.currentPosition = bestStrategy ? bestStrategy.currentPosition : this.state.currentPosition;
+    this.state.totalPnL = bestStrategy ? bestStrategy.totalPnL : this.state.totalPnL;
+    this.state.totalTrades = bestStrategy ? bestStrategy.totalTrades : this.state.totalTrades;
+    this.state.winningTrades = bestStrategy ? bestStrategy.winningTrades : this.state.winningTrades;
+    
+    // Update state with full chart data
+    this.updateState();
   }
 
   /**

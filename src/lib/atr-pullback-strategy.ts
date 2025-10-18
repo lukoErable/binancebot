@@ -26,7 +26,7 @@ export const atrPullbackDefaultConfig: AtrPullbackConfig = {
   profitTargetPercent: 1.2,
   stopLossPercent: 0.8,
   maxPositionTime: 180 * 60 * 1000, // 180 min
-  positionSize: 0.01 // ~1% de 100k$ sur BTC
+  positionSize: 0.05 // ~5% de 100k$ sur BTC (Balanced)
 };
 
 export class AtrTrendPullbackStrategy {

@@ -581,6 +581,6 @@ export const defaultStrategyConfig: StrategyConfig = {
   profitTargetPercent: 2.5, // Take profit at 2.5% (2% profit + 0.2% fees + 0.3% buffer)
   stopLossPercent: 1.5, // Stop loss at 1.5% (1% loss + 0.2% fees + 0.3% buffer)
   maxPositionTime: 60 * 60 * 1000, // Max 1 hour in position
-  positionSize: 0.01 // Trade 0.01 BTC (~1,100 USDT per trade) - 1.1% of 100,000$ capital
+  positionSize: 0.05 // Trade 0.05 BTC (~5,000 USDT per trade) - 5% of 100,000$ capital (Balanced)
 };
 

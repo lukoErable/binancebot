@@ -631,7 +631,7 @@ export const volumeMACDStrategyConfig: StrategyConfig = {
   profitTargetPercent: 2.5,
   stopLossPercent: 1.5,
   maxPositionTime: 45 * 60 * 1000, // 45 minutes
-  positionSize: 0.01, // Trade 0.01 BTC (~1,100 USDT per trade) - 1.1% of 100,000$ capital
+  positionSize: 0.05, // Trade 0.05 BTC (~5,000 USDT per trade) - 5% of 100,000$ capital (Balanced)
   // MACD-specific parameters
   emaFastPeriod: 12,
   emaSlowPeriod: 26,

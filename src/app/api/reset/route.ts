@@ -5,8 +5,18 @@ export async function POST(request: NextRequest) {
   console.log('🔄 Resetting all trading data...');
 
   try {
-    const body = await request.json();
-    const { strategyName } = body;
+    // Accept empty body; if parsing fails, default to {}
+    let body: any = {};
+    try {
+      const contentType = request.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const raw = await request.text();
+        body = raw ? JSON.parse(raw) : {};
+      }
+    } catch {
+      body = {};
+    }
+    const { strategyName } = body as { strategyName?: string };
 
     if (strategyName) {
       // Reset specific strategy
@@ -26,8 +36,10 @@ export async function POST(request: NextRequest) {
       const beforeCount = await pool.query('SELECT COUNT(*) as count FROM trades');
       const count = parseInt(beforeCount.rows[0].count);
       
-      // Delete all trades
+      // Delete all strategy-derived data (signals, open positions, completed trades, performances)
       await pool.query('DELETE FROM trades');
+      await pool.query('DELETE FROM open_positions');
+      await pool.query('DELETE FROM completed_trades');
       await pool.query('DELETE FROM strategy_performances');
       await pool.query('UPDATE strategies SET is_active = false');
       

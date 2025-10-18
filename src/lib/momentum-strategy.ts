@@ -271,7 +271,7 @@ export class MomentumCrossoverStrategy {
    * Analyze market using Momentum Crossover strategy
    */
   analyzeMarket(candles: Candle[]): TradingSignal | null {
-    console.log('[Momentum Crossover] 🔍 Analyzing market...');
+    // console.log('[Momentum Crossover] 🔍 Analyzing market...');
     
     const requiredCandles = Math.max(
       this.config.ema200Period,
@@ -400,10 +400,10 @@ export class MomentumCrossoverStrategy {
     // Crossovers already computed above
 
     // Debug logs for crossover detection
-    console.log(`[Momentum] EMA12: ${emaFast.toFixed(2)} | EMA26: ${emaSlow.toFixed(2)} | EMA200: ${ema200.toFixed(2)}`);
-    console.log(`[Momentum] Prev EMA12: ${prevEmaFast.toFixed(2)} | Prev EMA26: ${prevEmaSlow.toFixed(2)}`);
-    console.log(`[Momentum] Price: ${currentPrice.toFixed(2)} | Above EMA200: ${currentPrice > ema200}`);
-    console.log(`[Momentum] Bullish Crossover: ${isBullishCrossover} | Bearish Crossover: ${isBearishCrossover}`);
+    // console.log(`[Momentum] EMA12: ${emaFast.toFixed(2)} | EMA26: ${emaSlow.toFixed(2)} | EMA200: ${ema200.toFixed(2)}`);
+    // console.log(`[Momentum] Prev EMA12: ${prevEmaFast.toFixed(2)} | Prev EMA26: ${prevEmaSlow.toFixed(2)}`);
+    // console.log(`[Momentum] Price: ${currentPrice.toFixed(2)} | Above EMA200: ${currentPrice > ema200}`);
+    // console.log(`[Momentum] Bullish Crossover: ${isBullishCrossover} | Bearish Crossover: ${isBearishCrossover}`);
 
     // LONG entry: Bullish crossover above EMA200
     if (isBullishCrossover && currentPrice > ema200) {
@@ -671,7 +671,7 @@ export const momentumStrategyConfig: StrategyConfig = {
   profitTargetPercent: 2.5,
   stopLossPercent: 1.5,
   maxPositionTime: 60 * 60 * 1000, // 1 hour
-  positionSize: 0.01, // Trade 0.01 BTC (~1,100 USDT per trade) - 1.1% of 100,000$ capital
+  positionSize: 0.05, // Trade 0.05 BTC (~5,000 USDT per trade) - 5% of 100,000$ capital (Balanced)
   // Momentum-specific parameters
   emaFastPeriod: 12,
   emaSlowPeriod: 26,

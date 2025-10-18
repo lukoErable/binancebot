@@ -344,7 +344,7 @@ export class BollingerBounceStrategy {
       const isOversold = rsi < this.config.rsiBuyThreshold;
       
       if (isBouncing && isOversold && isVolatile) {
-        const quantity = 0.001; // Fixed quantity for backtesting
+        const quantity = 0.05; // 5% of capital (Balanced) - Fixed quantity for backtesting
         
         this.currentPosition = {
           type: 'LONG',

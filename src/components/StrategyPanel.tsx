@@ -3,7 +3,20 @@
 import { StrategyPerformance } from '@/types/trading';
 import { useRef, useState } from 'react';
 import { FaBrain } from 'react-icons/fa';
-import { HiBookOpen, HiChevronDown, HiChevronRight, HiClock, HiCog, HiCurrencyDollar, HiLightningBolt, HiRefresh, HiSortAscending, HiTrendingUp, HiViewGrid } from 'react-icons/hi';
+import { HiBookOpen, HiChevronDown, HiChevronRight, HiClock, HiCog, HiCurrencyDollar, HiLightningBolt, HiPlus, HiRefresh, HiSortAscending, HiTrash, HiTrendingUp, HiViewGrid } from 'react-icons/hi';
+
+interface IndicatorPanelData {
+  price: number;
+  rsi: number;
+  ema12: number;
+  ema26: number;
+  ema50: number;
+  ema200: number;
+  ma7: number;
+  ma25: number;
+  ma99: number;
+  volume?: number;
+}
 
 interface StrategyPanelProps {
   performances: StrategyPerformance[];
@@ -12,9 +25,14 @@ interface StrategyPanelProps {
   onSelectStrategy?: (strategyName: string) => void;
   onRefresh?: () => void;
   onConfigChange?: (strategyName: string, config: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }) => void;
-  getCriteriaForStrategy?: (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK', strategyMetrics: StrategyPerformance) => { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number; longReady?: boolean; shortReady?: boolean } | null;
+  getCriteriaForStrategy?: (strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM', strategyMetrics: StrategyPerformance) => { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number; longReady?: boolean; shortReady?: boolean } | null;
   getStatusesArray?: (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short') => string[];
   renderCriteriaLabels?: (criteria: { strategyType: string; long: Record<string, string | boolean>; short: Record<string, string | boolean>; cooldownRemaining: number }, type: 'long' | 'short') => React.ReactNode;
+  onGenerateAIStrategy?: () => void;
+  isGeneratingAI?: boolean;
+  onCreateStrategy?: () => void;
+  indicatorData?: IndicatorPanelData | null;
+  onDeleteStrategy?: (strategyName: string) => void;
 }
 
 export default function StrategyPanel({ 
@@ -26,31 +44,42 @@ export default function StrategyPanel({
   onConfigChange,
   getCriteriaForStrategy,
   getStatusesArray,
-  renderCriteriaLabels
+  renderCriteriaLabels,
+  onGenerateAIStrategy,
+  isGeneratingAI,
+  onCreateStrategy,
+  indicatorData,
+  onDeleteStrategy
 }: StrategyPanelProps) {
   const [viewMode, setViewMode] = useState<'compact' | 'normal'>('normal');
   const [resetConfirm, setResetConfirm] = useState<string | null>(null); // Strategy name to reset
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null); // Strategy name to delete
   const [flippedCards, setFlippedCards] = useState<Set<string>>(new Set()); // Cartes retournées pour afficher les détails
   const [expandedSections, setExpandedSections] = useState<Record<string, Set<string>>>({}); // Sections étendues par stratégie
   const [sortMode, setSortMode] = useState<'smart' | 'pnl' | 'winrate' | 'capital' | 'alphabetical'>('smart'); // Mode de tri
   const [settingsOpen, setSettingsOpen] = useState<string | null>(null); // Strategy name in settings mode
+  const [showIndicators, setShowIndicators] = useState(false); // Toggle indicators panel
   const [tempSettings, setTempSettings] = useState<{
     profitTarget: number;
     stopLoss: number;
     maxPositionTime: number;
+    cooldownMinutes: number;
     enableTP: boolean;
     enableSL: boolean;
     enableMaxPos: boolean;
-  }>({ profitTarget: 0, stopLoss: 0, maxPositionTime: 0, enableTP: true, enableSL: true, enableMaxPos: true });
+    enableCooldown: boolean;
+  }>({ profitTarget: 0, stopLoss: 0, maxPositionTime: 0, cooldownMinutes: 0, enableTP: true, enableSL: true, enableMaxPos: true, enableCooldown: true });
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Cache local des paramètres modifiés (persiste après fermeture de Settings)
   const [localConfigCache, setLocalConfigCache] = useState<Record<string, { 
     profitTargetPercent?: number | null; 
     stopLossPercent?: number | null; 
     maxPositionTime?: number | null;
+    cooldownPeriod?: number | null; // ms
     enableTP?: boolean;
     enableSL?: boolean;
     enableMaxPos?: boolean;
+    enableCooldown?: boolean;
   }>>({});
 
   const toggleCardFlip = (strategyName: string) => {
@@ -189,7 +218,7 @@ export default function StrategyPanel({
     setSortMode(modes[nextIndex]);
   };
 
-  const openSettings = (strategyName: string, strategyType: string, strategyConfig?: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }) => {
+  const openSettings = (strategyName: string, strategyType: string, strategyConfig?: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null } & { cooldownPeriod?: number | null }) => {
     // Fermer le mode Read si ouvert
     setFlippedCards(prev => {
       const newSet = new Set(prev);
@@ -214,14 +243,19 @@ export default function StrategyPanel({
     const enableMaxPos = cachedConfig?.enableMaxPos !== undefined 
       ? cachedConfig.enableMaxPos 
       : (mergedConfig?.maxPositionTime !== null && mergedConfig?.maxPositionTime !== undefined);
+    const enableCooldown = cachedConfig?.enableCooldown !== undefined
+      ? cachedConfig.enableCooldown
+      : (mergedConfig?.cooldownPeriod !== null && mergedConfig?.cooldownPeriod !== undefined);
     
     setTempSettings({
       profitTarget: params.profitTarget,
       stopLoss: params.stopLoss,
       maxPositionTime: params.maxPositionTime,
+      cooldownMinutes: Math.max(0, Math.round((((mergedConfig as any)?.cooldownPeriod ?? (params.cooldown * 60)) || 0) / 60000)),
       enableTP,
       enableSL,
-      enableMaxPos
+      enableMaxPos,
+      enableCooldown: enableCooldown ?? false
     });
     setSettingsOpen(strategyName);
   };
@@ -236,9 +270,11 @@ export default function StrategyPanel({
       profitTargetPercent: newSettings.enableTP ? newSettings.profitTarget : null,
       stopLossPercent: newSettings.enableSL ? newSettings.stopLoss : null,
       maxPositionTime: newSettings.enableMaxPos ? newSettings.maxPositionTime : null,
+      cooldownPeriod: newSettings.enableCooldown ? Math.max(0, newSettings.cooldownMinutes * 60 * 1000) : null,
       enableTP: newSettings.enableTP,
       enableSL: newSettings.enableSL,
-      enableMaxPos: newSettings.enableMaxPos
+      enableMaxPos: newSettings.enableMaxPos,
+      enableCooldown: newSettings.enableCooldown
     };
     
     // Mettre à jour le cache local immédiatement pour l'UI réactive
@@ -428,6 +464,51 @@ export default function StrategyPanel({
     }
   };
 
+  const handleDeleteStrategy = async (strategyName: string, strategyType: string) => {
+    try {
+      // Only allow deletion of CUSTOM strategies
+      if (strategyType !== 'CUSTOM') {
+        console.log('❌ Only custom strategies can be deleted');
+        setDeleteConfirm(null);
+        return;
+      }
+
+      // First reset the strategy (delete all trades and data)
+      const resetResponse = await fetch('/api/trading', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'resetStrategy',
+          strategyName 
+        })
+      });
+
+      if (!resetResponse.ok) {
+        throw new Error('Failed to reset strategy data');
+      }
+
+      // Then delete the strategy from database
+      const deleteResponse = await fetch('/api/custom-strategy', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: strategyName })
+      });
+
+      if (deleteResponse.ok) {
+        console.log(`🗑️ Strategy "${strategyName}" deleted successfully`);
+        setDeleteConfirm(null);
+        // Reload page to refresh data
+        window.location.reload();
+      } else {
+        const data = await deleteResponse.json();
+        throw new Error(data.error || 'Failed to delete strategy');
+      }
+    } catch (error: any) {
+      console.error('❌ Error deleting strategy:', error);
+      setDeleteConfirm(null);
+    }
+  };
+
   // Get strategy parameters (SL/TP based on strategy type)
   const formatCooldown = (ms: number) => {
     const minutes = Math.floor(ms / 60000);
@@ -443,7 +524,7 @@ export default function StrategyPanel({
     }
   };
 
-  const getStrategyParams = (strategyType: string, strategyConfig?: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }) => {
+  const getStrategyParams = (strategyType: string, strategyConfig?: { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null } & { cooldownPeriod?: number | null }) => {
     // Valeurs par défaut
     const defaults: Record<string, { profitTarget: number; stopLoss: number; maxPositionTime: number; cooldown: number }> = {
       'RSI_EMA': { profitTarget: 2.5, stopLoss: 1.5, maxPositionTime: 60, cooldown: 300 },
@@ -462,12 +543,38 @@ export default function StrategyPanel({
       profitTarget: strategyConfig?.profitTargetPercent ?? defaultParams.profitTarget,
       stopLoss: strategyConfig?.stopLossPercent ?? defaultParams.stopLoss,
       maxPositionTime: strategyConfig?.maxPositionTime ?? defaultParams.maxPositionTime,
-      cooldown: defaultParams.cooldown
+      cooldown: (strategyConfig as any)?.cooldownPeriod ? Math.round((((strategyConfig as any).cooldownPeriod || 0) / 60_000)) : defaultParams.cooldown
     };
   };
 
-  // Strategy color mapping
-  const getStrategyColor = (strategyType: string) => {
+  // Strategy color mapping (with predefined color mapping for CUSTOM)
+  const getStrategyColor = (perf: StrategyPerformance) => {
+    const strategyType = perf.strategyType;
+    const customColor = perf.strategyType === 'CUSTOM' && perf.customConfig?.color 
+      ? perf.customConfig.color 
+      : undefined;
+    
+    // For CUSTOM strategies with predefined color map
+    if (strategyType === 'CUSTOM' && customColor) {
+      const colorMap: Record<string, any> = {
+        emerald: { border: 'border-emerald-400', borderDimmed: 'border-emerald-400/40', text: 'text-emerald-400', accent: 'bg-emerald-400' },
+        rose: { border: 'border-rose-400', borderDimmed: 'border-rose-400/40', text: 'text-rose-400', accent: 'bg-rose-400' },
+        indigo: { border: 'border-indigo-400', borderDimmed: 'border-indigo-400/40', text: 'text-indigo-400', accent: 'bg-indigo-400' },
+        violet: { border: 'border-violet-400', borderDimmed: 'border-violet-400/40', text: 'text-violet-400', accent: 'bg-violet-400' },
+        amber: { border: 'border-amber-400', borderDimmed: 'border-amber-400/40', text: 'text-amber-400', accent: 'bg-amber-400' },
+        lime: { border: 'border-lime-400', borderDimmed: 'border-lime-400/40', text: 'text-lime-400', accent: 'bg-lime-400' },
+        sky: { border: 'border-sky-400', borderDimmed: 'border-sky-400/40', text: 'text-sky-400', accent: 'bg-sky-400' },
+        fuchsia: { border: 'border-fuchsia-400', borderDimmed: 'border-fuchsia-400/40', text: 'text-fuchsia-400', accent: 'bg-fuchsia-400' },
+        pink: { border: 'border-pink-400', borderDimmed: 'border-pink-400/40', text: 'text-pink-400', accent: 'bg-pink-400' },
+        red: { border: 'border-red-400', borderDimmed: 'border-red-400/40', text: 'text-red-400', accent: 'bg-red-400' },
+        green: { border: 'border-green-400', borderDimmed: 'border-green-400/40', text: 'text-green-400', accent: 'bg-green-400' },
+        slate: { border: 'border-slate-400', borderDimmed: 'border-slate-400/40', text: 'text-slate-400', accent: 'bg-slate-400' },
+        stone: { border: 'border-stone-400', borderDimmed: 'border-stone-400/40', text: 'text-stone-400', accent: 'bg-stone-400' }
+      };
+      
+      return colorMap[customColor] || colorMap.fuchsia; // Fallback to fuchsia
+    }
+    
     switch (strategyType) {
       case 'RSI_EMA':
         return {
@@ -506,10 +613,17 @@ export default function StrategyPanel({
         };
       case 'ATR_PULLBACK':
         return {
-          border: 'border-lime-400',
-          borderDimmed: 'border-lime-400/40',
-          text: 'text-lime-400',
-          accent: 'bg-lime-400'
+          border: 'border-yellow-400',
+          borderDimmed: 'border-yellow-400/40',
+          text: 'text-yellow-400',
+          accent: 'bg-yellow-400'
+        };
+      case 'CUSTOM':
+        return {
+          border: 'border-fuchsia-400',
+          borderDimmed: 'border-fuchsia-400/40',
+          text: 'text-fuchsia-400',
+          accent: 'bg-fuchsia-400'
         };
       default:
         return {
@@ -538,14 +652,49 @@ export default function StrategyPanel({
     <div className="bg-gray-800 border-b border-gray-700">
       {/* View Mode Toggle */}
       <div className="px-4 py-2 flex items-center justify-between">
-        {/* Best Strategy Indicator */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-yellow-500/10 to-amber-500/10 border border-yellow-500/30 rounded-lg">
-          <span className="text-yellow-400 text-lg">🏆</span>
-          <div className="flex flex-col">
-            <span className="text-sm font-bold text-yellow-400">{bestStrategy?.strategyName || 'N/A'}</span>
+        {/* Best Strategy Indicator + AI Button */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-yellow-500/10 to-amber-500/10 border border-yellow-500/30 rounded-lg">
+            <span className="text-yellow-400 text-lg">🏆</span>
+            <div className="flex flex-col">
+              <span className="text-sm font-bold text-yellow-400">{bestStrategy?.strategyName || 'N/A'}</span>
+            </div>
+            <div className="ml-2 px-2 py-0.5 bg-yellow-500/20 rounded text-xs font-bold text-yellow-300">
+              {bestStrategy ? `+${bestStrategy.totalPnL.toFixed(2)} USDT` : '0.00'}
+            </div>
           </div>
-          <div className="ml-2 px-2 py-0.5 bg-yellow-500/20 rounded text-xs font-bold text-yellow-300">
-            {bestStrategy ? `+${bestStrategy.totalPnL.toFixed(2)} USDT` : '0.00'}
+
+          {/* AI Generate & Create Strategy Buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onGenerateAIStrategy}
+              disabled={isGeneratingAI}
+              className={`flex items-center gap-2 px-3 py-2 bg-gray-800/80 hover:bg-gray-700/80 rounded-lg border border-gray-600/50 transition-all ${
+                isGeneratingAI ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+              title="Générer une stratégie aléatoire avec l'IA"
+            >
+              {isGeneratingAI ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-xs font-medium text-gray-300">Generating...</span>
+                </>
+              ) : (
+                <>
+                  <FaBrain className="w-4 h-4 text-gray-400" />
+                  <span className="text-xs font-medium text-gray-300">AI</span>
+                </>
+              )}
+            </button>
+            
+            <button
+              onClick={onCreateStrategy}
+              className="flex items-center gap-2 px-3 py-2 bg-gray-800/80 hover:bg-gray-700/80 rounded-lg border border-gray-600/50 transition-all"
+              title="Créer une nouvelle stratégie personnalisée"
+            >
+              <HiPlus className="w-4 h-4 text-gray-400" />
+              <span className="text-xs font-medium text-gray-300">New</span>
+            </button>
           </div>
         </div>
 
@@ -587,19 +736,35 @@ export default function StrategyPanel({
             </svg>
           </button>
           </div>
+          {/* Reset All Button */}
+          <button
+            onClick={async () => {
+              try {
+                await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                onRefresh?.();
+                window.location.reload();
+              } catch (e) {
+                console.error('❌ Reset all failed', e);
+              }
+            }}
+            className="px-3 py-1.5 bg-gray-800/50 rounded-lg border border-gray-700/50 hover:border-red-500/60 text-red-400 hover:text-red-300 transition-all"
+            title="Reset All (delete all trades/signals and stop strategies)"
+          >
+            Reset All
+          </button>
         </div>
       </div>
 
       {/* Strategy Cards */}
       <div className={`px-4 pb-4 grid gap-4 ${
         viewMode === 'compact' 
-          ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4' 
+          ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3' 
           : flippedCards.size > 0
           ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
           : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
       }`}>
         {sortedPerformances.map((perf) => {
-          const colors = getStrategyColor(perf.strategyType);
+          const colors = getStrategyColor(perf);
           
           // Get criteria for this strategy
           const strategyCriteria = getCriteriaForStrategy?.(perf.strategyType, perf);
@@ -816,6 +981,45 @@ export default function StrategyPanel({
                         <HiCog className="w-3.5 h-3.5" />
                       </button>
 
+                      {/* Delete Button - Only for CUSTOM strategies */}
+                      {perf.strategyType === 'CUSTOM' && (
+                        deleteConfirm === perf.strategyName ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteStrategy(perf.strategyName, perf.strategyType);
+                              }}
+                              className="px-2 py-1 text-green-400 hover:opacity-70 text-xs font-medium transition-opacity"
+                              title="Confirmer la suppression"
+                            >
+                              ✓
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirm(null);
+                              }}
+                              className="px-2 py-1 text-red-400 hover:opacity-70 text-xs font-medium transition-opacity"
+                              title="Annuler"
+                            >
+                              ✗
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirm(perf.strategyName);
+                            }}
+                            className="p-1.5 text-red-400 hover:opacity-70 transition-opacity"
+                            title="Supprimer la stratégie (CUSTOM uniquement)"
+                          >
+                            <HiTrash className="w-3.5 h-3.5" />
+                          </button>
+                        )
+                      )}
+
                       {/* Reset Button */}
                       {resetConfirm === perf.strategyName ? (
                         <div className="flex items-center gap-1">
@@ -890,6 +1094,42 @@ export default function StrategyPanel({
                     </div>
                     
                       <div className="px-3 pb-3 space-y-2">
+                      {/* Cooldown */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-gray-400">Cooldown</span>
+                          <span className={`font-bold text-xs ${tempSettings.enableCooldown ? 'text-orange-400' : 'text-gray-600'}`}>
+                            {tempSettings.cooldownMinutes}m
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={tempSettings.enableCooldown}
+                            onChange={(e) => {
+                              const newSettings = { ...tempSettings, enableCooldown: e.target.checked };
+                              setTempSettings(newSettings);
+                              autoSaveSettings(perf.strategyName, newSettings);
+                            }}
+                            className="w-3 h-3 rounded accent-orange-500 flex-shrink-0"
+                          />
+                          {tempSettings.enableCooldown && (
+                            <input
+                              type="range"
+                              min="0"
+                              max="120"
+                              step="1"
+                              value={tempSettings.cooldownMinutes}
+                              onChange={(e) => {
+                                const newSettings = { ...tempSettings, cooldownMinutes: parseInt(e.target.value) };
+                                setTempSettings(newSettings);
+                                autoSaveSettings(perf.strategyName, newSettings);
+                              }}
+                              className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
+                          )}
+                        </div>
+                      </div>
                             {/* Take Profit */}
                             <div className="space-y-1">
                               <div className="flex items-center justify-between">
@@ -1007,7 +1247,7 @@ export default function StrategyPanel({
                     <div className="space-y-3">
                       {/* Description */}
                       <p className="text-sm text-gray-300 leading-relaxed">
-                        {getStrategyDescription(perf.strategyType)?.description}
+                        {getStrategyDescription(perf.strategyType)?.description ?? perf.customConfig?.description}
                       </p>
                       
                       {/* Critères LONG - Réduisible */}
@@ -1024,15 +1264,21 @@ export default function StrategyPanel({
                           )}
                         </div>
                         {isSectionExpanded(perf.strategyName, 'long') && (
-                          <ul className="px-3 pb-3 space-y-1.5">
-                            {getStrategyDescription(perf.strategyType)?.longCriteria.map((criteria, idx) => (
-                              <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
-                                <span className="text-green-400 mt-0.5">•</span>
-                                <span>{criteria}</span>
-                              </li>
-                            ))}
-                          </ul>
-                      )}
+                          perf.strategyType === 'CUSTOM' && perf.customConfig?.longNotes ? (
+                            <p className="px-3 pb-3 text-xs text-gray-300 leading-relaxed">
+                              {perf.customConfig.longNotes}
+                            </p>
+                          ) : (
+                            <ul className="px-3 pb-3 space-y-1.5">
+                              {getStrategyDescription(perf.strategyType)?.longCriteria.map((criteria, idx) => (
+                                <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
+                                  <span className="text-green-400 mt-0.5">•</span>
+                                  <span>{criteria}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )
+                        )}
                       </div>
                       
                       {/* Critères SHORT - Réduisible */}
@@ -1049,14 +1295,20 @@ export default function StrategyPanel({
                           )}
                         </div>
                         {isSectionExpanded(perf.strategyName, 'short') && (
-                          <ul className="px-3 pb-3 space-y-1.5">
-                            {getStrategyDescription(perf.strategyType)?.shortCriteria.map((criteria, idx) => (
-                              <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
-                                <span className="text-red-400 mt-0.5">•</span>
-                                <span>{criteria}</span>
-                              </li>
-                            ))}
-                          </ul>
+                          perf.strategyType === 'CUSTOM' && perf.customConfig?.shortNotes ? (
+                            <p className="px-3 pb-3 text-xs text-gray-300 leading-relaxed">
+                              {perf.customConfig.shortNotes}
+                            </p>
+                          ) : (
+                            <ul className="px-3 pb-3 space-y-1.5">
+                              {getStrategyDescription(perf.strategyType)?.shortCriteria.map((criteria, idx) => (
+                                <li key={idx} className="text-xs text-gray-300 flex items-start gap-2">
+                                  <span className="text-red-400 mt-0.5">•</span>
+                                  <span>{criteria}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )
                         )}
                       </div>
                       
@@ -1075,7 +1327,7 @@ export default function StrategyPanel({
                         </div>
                         {isSectionExpanded(perf.strategyName, 'logic') && (
                           <p className="px-3 pb-3 text-xs text-gray-300 leading-relaxed">
-                            {getStrategyDescription(perf.strategyType)?.logic}
+                            {getStrategyDescription(perf.strategyType)?.logic ?? perf.customConfig?.strategyLogic}
                           </p>
                         )}
                         </div>
@@ -1092,6 +1344,13 @@ export default function StrategyPanel({
                           <div className="flex items-center gap-2">
                             <span className={`text-base ${longReady ? 'text-green-500 drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]' : 'text-green-400/40'}`}>🟢</span>
                             {renderCriteriaLabels(strategyCriteria, 'long')}
+                            {/* Inline cooldown between labels and points */}
+                            {strategyCriteria.cooldownRemaining > 0 && (
+                              <span className="flex items-center gap-1 text-[10px] text-orange-400 ml-2">
+                                <HiClock className="w-3 h-3" />
+                                {formatCooldown(strategyCriteria.cooldownRemaining)}
+                                </span>
+                            )}
                             </div>
                           {/* Status points for LONG - on the right */}
                           <div className="flex gap-1">
@@ -1111,6 +1370,13 @@ export default function StrategyPanel({
                           <div className="flex items-center gap-2">
                             <span className={`text-base ${shortReady ? 'text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]' : 'text-red-400/40'}`}>🔴</span>
                             {renderCriteriaLabels(strategyCriteria, 'short')}
+                            {/* Inline cooldown between labels and points */}
+                            {strategyCriteria.cooldownRemaining > 0 && (
+                              <span className="flex items-center gap-1 text-[10px] text-orange-400 ml-2">
+                                <HiClock className="w-3 h-3" />
+                                {formatCooldown(strategyCriteria.cooldownRemaining)}
+                                </span>
+                            )}
                           </div>
                           {/* Status points for SHORT - on the right */}
                           <div className="flex gap-1">
@@ -1126,15 +1392,7 @@ export default function StrategyPanel({
                         </div>
                       </div>
                       
-                        {/* Cooldown Display */}
-                        {strategyCriteria.cooldownRemaining > 0 && (
-                          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/30">
-                            <HiClock className="w-3 h-3 text-orange-400" />
-                            <span className="text-xs text-orange-400">
-                              Cooldown: {formatCooldown(strategyCriteria.cooldownRemaining)}
-                            </span>
-                          </div>
-                        )}
+                        {/* Cooldown moved inline with criteria rows */}
                       </div>
                     </div>
                   )}
@@ -1245,8 +1503,266 @@ export default function StrategyPanel({
               </span>
             </div>
           </div>
+          
+          {/* Toggle Indicators Button */}
+          <button
+            onClick={() => setShowIndicators(!showIndicators)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors text-gray-300 hover:text-white"
+            title={showIndicators ? 'Masquer les indicateurs' : 'Afficher tous les indicateurs'}
+          >
+            <span className="text-sm font-medium">📊 Indicators</span>
+            {showIndicators ? (
+              <HiChevronDown className="w-4 h-4" />
+            ) : (
+              <HiChevronRight className="w-4 h-4" />
+            )}
+          </button>
         </div>
       </div>
+
+      {/* Technical Indicators Panel - Collapsible */}
+      {showIndicators && indicatorData && (
+        <div className="px-4 pb-4 border-t border-gray-700">
+          <div className="bg-gray-900 rounded-lg p-4 space-y-4">
+            <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+              <span className="text-2xl">📊</span>
+              Technical Indicators
+            </h3>
+            
+            {/* Grid of indicators */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+              {/* Price */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">💰 Price</div>
+                <div className="text-lg font-bold text-white">
+                  ${indicatorData.price.toFixed(2)}
+                </div>
+              </div>
+              
+              {/* RSI */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">📊 RSI (14)</div>
+                <div className={`text-lg font-bold ${
+                  indicatorData.rsi < 30 ? 'text-green-400' :
+                  indicatorData.rsi > 70 ? 'text-red-400' :
+                  'text-yellow-400'
+                }`}>
+                  {indicatorData.rsi.toFixed(1)}
+                </div>
+              </div>
+              
+              {/* EMA 12 */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">📈 EMA 12</div>
+                <div className={`text-sm font-bold ${
+                  indicatorData.price > indicatorData.ema12 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  ${indicatorData.ema12.toFixed(2)}
+                </div>
+              </div>
+              
+              {/* EMA 26 */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">📈 EMA 26</div>
+                <div className={`text-sm font-bold ${
+                  indicatorData.price > indicatorData.ema26 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  ${indicatorData.ema26.toFixed(2)}
+                </div>
+              </div>
+              
+              {/* EMA 50 */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-blue-500/30">
+                <div className="text-xs text-blue-400 mb-1 font-semibold">📈 EMA 50</div>
+                <div className={`text-sm font-bold ${
+                  indicatorData.price > indicatorData.ema50 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  ${indicatorData.ema50.toFixed(2)}
+                </div>
+                <div className="text-[10px] text-gray-500 mt-0.5">
+                  {indicatorData.price > indicatorData.ema50 ? '↗ Above' : '↘ Below'}
+                </div>
+              </div>
+              
+              {/* EMA 200 */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-purple-500/30">
+                <div className="text-xs text-purple-400 mb-1 font-semibold">📈 EMA 200</div>
+                <div className={`text-sm font-bold ${
+                  indicatorData.price > indicatorData.ema200 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  ${indicatorData.ema200.toFixed(2)}
+                </div>
+                <div className="text-[10px] text-gray-500 mt-0.5">
+                  {indicatorData.ema50 > indicatorData.ema200 ? '🚀 Bullish' : '📉 Bearish'}
+                </div>
+              </div>
+              
+              {/* MA 7 */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">📊 MA 7</div>
+                <div className="text-sm font-bold text-cyan-400">
+                  ${indicatorData.ma7.toFixed(2)}
+                </div>
+              </div>
+              
+              {/* MA 25 */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">📊 MA 25</div>
+                <div className="text-sm font-bold text-cyan-400">
+                  ${indicatorData.ma25.toFixed(2)}
+                </div>
+              </div>
+              
+              {/* MA 99 */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">📊 MA 99</div>
+                <div className="text-sm font-bold text-cyan-400">
+                  ${indicatorData.ma99.toFixed(2)}
+                </div>
+              </div>
+              
+              {/* Volume */}
+              {indicatorData.volume && (
+                <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                  <div className="text-xs text-gray-400 mb-1">📊 Volume</div>
+                  <div className="text-sm font-bold text-orange-400">
+                    {(indicatorData.volume / 1000).toFixed(2)}K
+                  </div>
+                </div>
+              )}
+              
+              {/* Trend Status */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">🎯 Trend</div>
+                <div className={`text-sm font-bold ${
+                  indicatorData.ema50 > indicatorData.ema200 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {indicatorData.ema50 > indicatorData.ema200 ? '🚀 Bullish' : '📉 Bearish'}
+                </div>
+              </div>
+              
+              {/* Price Position */}
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="text-xs text-gray-400 mb-1">📍 Position</div>
+                <div className={`text-sm font-bold ${
+                  indicatorData.price > indicatorData.ema50 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {indicatorData.price > indicatorData.ema50 ? '↗ Above 50' : '↘ Below 50'}
+                </div>
+              </div>
+            </div>
+            
+            {/* Detailed View - Expandable sections */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
+              {/* Moving Averages Detail */}
+              <div className="bg-gray-800/50 rounded-lg p-3 border border-blue-500/20">
+                <div className="text-sm font-semibold text-blue-400 mb-2">📈 Moving Averages</div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">EMA 12:</span>
+                    <span className="text-white">${indicatorData.ema12.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">EMA 26:</span>
+                    <span className="text-white">${indicatorData.ema26.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">EMA 50:</span>
+                    <span className="text-blue-400 font-semibold">${indicatorData.ema50.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">EMA 200:</span>
+                    <span className="text-purple-400 font-semibold">${indicatorData.ema200.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between pt-1 border-t border-gray-700/50">
+                    <span className="text-gray-400">MA 7:</span>
+                    <span className="text-white">${indicatorData.ma7.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">MA 25:</span>
+                    <span className="text-white">${indicatorData.ma25.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">MA 99:</span>
+                    <span className="text-white">${indicatorData.ma99.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Momentum Indicators */}
+              <div className="bg-gray-800/50 rounded-lg p-3 border border-yellow-500/20">
+                <div className="text-sm font-semibold text-yellow-400 mb-2">💪 Momentum</div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">RSI (14):</span>
+                    <span className={`font-bold ${
+                      indicatorData.rsi < 30 ? 'text-green-400' :
+                      indicatorData.rsi > 70 ? 'text-red-400' :
+                      'text-yellow-400'
+                    }`}>
+                      {indicatorData.rsi.toFixed(1)}
+                      {indicatorData.rsi < 30 ? ' 🟢 Oversold' : 
+                       indicatorData.rsi > 70 ? ' 🔴 Overbought' : 
+                       ' ⚪ Neutral'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">EMA Crossover:</span>
+                    <span className={`font-bold ${
+                      indicatorData.ema12 > indicatorData.ema26 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {indicatorData.ema12 > indicatorData.ema26 ? '↗ Bullish' : '↘ Bearish'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Trend Strength:</span>
+                    <span className={`font-bold ${
+                      indicatorData.ema50 > indicatorData.ema200 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {Math.abs(((indicatorData.ema50 - indicatorData.ema200) / indicatorData.ema200) * 100).toFixed(2)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Price Analysis */}
+              <div className="bg-gray-800/50 rounded-lg p-3 border border-green-500/20">
+                <div className="text-sm font-semibold text-green-400 mb-2">💰 Price Analysis</div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Current:</span>
+                    <span className="text-white font-bold">${indicatorData.price.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">vs EMA 50:</span>
+                    <span className={`font-bold ${
+                      indicatorData.price > indicatorData.ema50 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {((indicatorData.price - indicatorData.ema50) / indicatorData.ema50 * 100).toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">vs EMA 200:</span>
+                    <span className={`font-bold ${
+                      indicatorData.price > indicatorData.ema200 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {((indicatorData.price - indicatorData.ema200) / indicatorData.ema200 * 100).toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between pt-1 border-t border-gray-700/50">
+                    <span className="text-gray-400">Trend:</span>
+                    <span className={`font-bold ${
+                      indicatorData.ema50 > indicatorData.ema200 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {indicatorData.ema50 > indicatorData.ema200 ? 'BULL 🚀' : 'BEAR 📉'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
