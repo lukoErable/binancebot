@@ -249,67 +249,7 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
     
     const seenSignals = new Set<string>();
     
-    strategyPerformances.forEach((perf) => {
-      // Filter by selected strategy
-      if (selectedStrategy !== 'GLOBAL' && perf.strategyName !== selectedStrategy) {
-        return;
-      }
-      
-      console.log(`📊 ${perf.strategyName} signalHistory:`, perf.signalHistory?.length || 0);
-      
-      if (perf.signalHistory && perf.signalHistory.length > 0) {
-        // Show last 30 signals (should cover ~2-3 hours of trading)
-        const recentSignals = perf.signalHistory
-          .sort((a, b) => b.timestamp - a.timestamp) // Most recent first
-          .slice(0, 30); // Keep only last 30 signals
-        
-        console.log(`  → Showing ${recentSignals.length} recent signals from total ${perf.signalHistory.length}`);
-        
-        // Debug: log signal types
-        const signalTypes = recentSignals.map(s => s.type);
-        console.log(`  → Signal types:`, signalTypes);
-        
-        recentSignals.forEach((signal) => {
-          console.log(`  🔍 Processing signal:`, { type: signal.type, price: signal.price, timestamp: signal.timestamp });
-          
-          // Validate signal price
-          if (!signal.price || signal.price <= 0 || signal.price > 200000) {
-            console.log(`  ⚠️ Invalid signal price:`, signal.type, signal.price);
-            return;
-          }
-          
-          const signalKey = `${signal.type}-${signal.price}-${signal.timestamp}`;
-          if (seenSignals.has(signalKey)) return;
-          seenSignals.add(signalKey);
-          
-          // Find closest candle by time difference (more flexible approach)
-          let closestIndex = -1;
-          let minTimeDiff = Infinity;
-          
-          state.candles.forEach((candle, index) => {
-            const timeDiff = Math.abs(candle.time - signal.timestamp);
-            if (timeDiff < minTimeDiff) {
-              minTimeDiff = timeDiff;
-              closestIndex = index;
-            }
-          });
-          
-          // Only add signal if we found a reasonable match (within 30 minutes)
-          if (closestIndex !== -1 && minTimeDiff < 1800000) { // 30 minutes max
-            console.log(`  ✅ Adding ${signal.type} signal @ ${signal.price} to candle ${closestIndex} (time diff: ${Math.round(minTimeDiff / 60000)}min)`);
-            allSignals.push({
-              timestamp: signal.timestamp,
-              candleIndex: closestIndex,
-              type: signal.type,
-              price: signal.price,
-              strategy: perf.strategyName
-            });
-          } else {
-            console.log(`  ❌ No suitable candle found for ${signal.type} signal @ ${signal.price} (time diff: ${Math.round(minTimeDiff / 60000)}min)`);
-          }
-        });
-      }
-    });
+    // Signals are no longer tracked - using completed trades and open positions only
     
     console.log('📍 Signals Debug:', {
       totalPerformances: strategyPerformances?.length || 0,

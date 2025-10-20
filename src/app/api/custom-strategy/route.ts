@@ -72,16 +72,17 @@ export async function PUT(request: Request) {
   }
 }
 
-// DELETE - Delete a custom strategy
+// DELETE - Delete a custom strategy (for a specific timeframe)
 export async function DELETE(request: Request) {
   try {
-    const { name } = await request.json();
+    const { name, timeframe } = await request.json();
+    const tf = timeframe || '1m'; // Default to 1m if not specified
     
-    await CustomStrategyRepository.deleteCustomStrategy(name);
+    await CustomStrategyRepository.deleteCustomStrategy(name, tf);
     
     return NextResponse.json({ 
       success: true,
-      message: `Strategy "${name}" deleted successfully`
+      message: `Strategy "${name}" [${tf}] deleted successfully`
     });
   } catch (error: any) {
     console.error('Error deleting custom strategy:', error);

@@ -45,6 +45,9 @@ export interface CustomStrategyConfig {
   // Strategy metadata
   strategyType: string; // e.g., 'CUSTOM', 'RSI_EMA', etc.
   
+  // Timeframe
+  timeframe: string; // e.g., '1m', '5m', '15m', '1h', '4h', '1d'
+  
   // Simulation mode
   simulationMode: boolean;
 }
@@ -70,9 +73,7 @@ export class CustomStrategy {
   private winningTrades: number = 0;
   private initialCapital: number = 100000;
   
-  // Signal history
-  private signalHistory: TradingSignal[] = [];
-  private lastSignal: TradingSignal | null = null;
+  // Trade timing
   private lastTradeTime: number = 0;
   
   // Completed trades
@@ -264,7 +265,7 @@ export class CustomStrategy {
     this.entrySignal = signal;
     
     // Save open position to database
-    OpenPositionRepository.saveOpenPosition(this.config.name, this.currentPosition).catch(err => {
+    OpenPositionRepository.saveOpenPosition(this.config.name, this.currentPosition, this.config.timeframe).catch(err => {
       console.error('Failed to save open position:', err);
     });
     
@@ -304,7 +305,8 @@ export class CustomStrategy {
       pnlPercent,
       fees: 0,
       duration: timestamp - this.currentPosition.entryTime,
-      isWin
+      isWin,
+      timeframe: this.config.timeframe
     };
     
     CompletedTradeRepository.saveCompletedTrade(completedTrade).catch(err => {
@@ -314,7 +316,7 @@ export class CustomStrategy {
     this.completedTrades.unshift(completedTrade);
     
     // Delete open position from database
-    OpenPositionRepository.deleteOpenPosition(this.config.name).catch(err => {
+    OpenPositionRepository.deleteOpenPosition(this.config.name, this.config.timeframe).catch(err => {
       console.error('Failed to delete open position:', err);
     });
     
@@ -385,6 +387,10 @@ export class CustomStrategy {
    * Check if cooldown period has passed
    */
   private isCooldownPassed(): boolean {
+    // If cooldown is null or 0, no cooldown (always passed)
+    if (!this.config.cooldownPeriod || this.config.cooldownPeriod === 0) {
+      return true;
+    }
     return Date.now() - this.lastTradeTime >= this.config.cooldownPeriod;
   }
   
@@ -414,9 +420,6 @@ export class CustomStrategy {
   async executeTrade(signal: TradingSignal): Promise<void> {
     if (signal.type === 'HOLD') return;
     
-    // Record signal
-    this.recordSignal(signal);
-    
     if (this.config.simulationMode) {
       const signalEmoji = signal.type === 'BUY' ? '📈' : 
                          signal.type === 'SELL' ? '📉' : 
@@ -430,20 +433,6 @@ export class CustomStrategy {
   }
   
   /**
-   * Record signal in history
-   */
-  private recordSignal(signal: TradingSignal): void {
-    if (signal.type !== 'HOLD') {
-      this.lastSignal = signal;
-      this.signalHistory.push(signal);
-      
-      if (this.signalHistory.length > 50) {
-        this.signalHistory.shift();
-      }
-    }
-  }
-  
-  /**
    * Get position info
    */
   getPositionInfo() {
@@ -453,8 +442,6 @@ export class CustomStrategy {
       totalTrades: this.totalTrades,
       winningTrades: this.winningTrades,
       winRate: this.getWinRate(),
-      lastSignal: this.lastSignal,
-      signalHistory: this.signalHistory,
       completedTrades: this.completedTrades,
       currentCapital: this.initialCapital + this.totalPnL
     };
@@ -475,55 +462,35 @@ export class CustomStrategy {
   }
   
   /**
-   * Restore from database
+   * Restore from database (completed trades and open positions)
    */
-  async restoreFromDatabase(trades: any[]): Promise<void> {
-    console.log(`📥 [${this.config.name}] Restoring from ${trades.length} signals...`);
+  async restoreFromDatabase(): Promise<void> {
+    console.log(`📥 [${this.config.name}] Restoring from database...`);
     
     // Reset
     this.totalTrades = 0;
     this.winningTrades = 0;
     this.totalPnL = 0;
-    this.signalHistory = [];
     this.completedTrades = [];
     
     // Restore open position
-    const openPosition = await OpenPositionRepository.getOpenPosition(this.config.name);
+    const openPosition = await OpenPositionRepository.getOpenPosition(this.config.name, this.config.timeframe);
     if (openPosition && openPosition.type !== 'NONE') {
       this.currentPosition = openPosition;
-      console.log(`   Restored open ${openPosition.type} position @ ${openPosition.entryPrice.toFixed(2)}`);
+      console.log(`   Restored open ${openPosition.type} position @ ${openPosition.entryPrice.toFixed(2)} [${this.config.timeframe}]`);
     }
     
-    // Load completed trades
-    const completedTrades = await CompletedTradeRepository.getCompletedTradesByStrategy(this.config.name, 100);
+    // Load completed trades (filtered by timeframe)
+    const completedTrades = await CompletedTradeRepository.getCompletedTradesByStrategy(
+      this.config.name, 
+      100, 
+      this.config.timeframe
+    );
     this.completedTrades = completedTrades;
     
     this.totalTrades = completedTrades.length;
     this.winningTrades = completedTrades.filter(t => t.isWin).length;
     this.totalPnL = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
-    
-    // Restore signal history
-    this.signalHistory = trades
-      .filter((t: any) => t.signal_type !== 'HOLD')
-      .slice(0, 50)
-      .map((t: any) => ({
-        type: t.signal_type,
-        timestamp: parseInt(t.timestamp),
-        price: parseFloat(t.price),
-        rsi: 0,
-        ema12: 0,
-        ema26: 0,
-        ema50: 0,
-        ema200: 0,
-        ma7: 0,
-        ma25: 0,
-        ma99: 0,
-        reason: t.reason || ''
-      }));
-    
-    if (this.signalHistory.length > 0) {
-      this.lastSignal = this.signalHistory[0];
-    }
     
     console.log(`✅ [${this.config.name}] Restored: ${this.totalTrades} trades, Win Rate: ${this.getWinRate().toFixed(1)}%, P&L: ${this.totalPnL.toFixed(2)} USDT`);
   }
@@ -575,6 +542,7 @@ export const PresetStrategies = {
     maxPositionTime: 60 * 60 * 1000,
     positionSize: 0.05, // 5% capital (Balanced)
     cooldownPeriod: 5 * 60 * 1000,
+    timeframe: '1m',
     simulationMode: true
   }),
   
@@ -607,6 +575,7 @@ export const PresetStrategies = {
     maxPositionTime: 120 * 60 * 1000,
     positionSize: 0.05, // 5% capital (Balanced)
     cooldownPeriod: 2 * 60 * 1000,
+    timeframe: '1m',
     simulationMode: true
   }),
   
@@ -654,6 +623,7 @@ export const PresetStrategies = {
     maxPositionTime: 240 * 60 * 1000,
     positionSize: 0.05, // 5% capital (Balanced)
     cooldownPeriod: 0, // No cooldown for trend following
+    timeframe: '1m',
     simulationMode: true
   })
 };

@@ -9,19 +9,20 @@ export class StrategyRepository {
     name: string,
     type: string,
     isActive: boolean = false,
-    config?: { profitTargetPercent?: number; stopLossPercent?: number; maxPositionTime?: number }
+    config?: { profitTargetPercent?: number; stopLossPercent?: number; maxPositionTime?: number },
+    timeframe: string = '1m'
   ): Promise<void> {
     try {
-      const checkQuery = `SELECT 1 FROM strategies WHERE name = $1 LIMIT 1`;
-      const exists = await pool.query(checkQuery, [name]);
+      const checkQuery = `SELECT 1 FROM strategies WHERE name = $1 AND timeframe = $2 LIMIT 1`;
+      const exists = await pool.query(checkQuery, [name, timeframe]);
       if (exists.rowCount && exists.rowCount > 0) return;
 
       const insertQuery = `
-        INSERT INTO strategies (name, type, is_active, config, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO strategies (name, type, is_active, config, timeframe, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `;
-      await pool.query(insertQuery, [name, type, isActive, JSON.stringify(config || {})]);
-      console.log(`✅ Strategy created in DB: ${name} (${type})`);
+      await pool.query(insertQuery, [name, type, isActive, JSON.stringify(config || {}), timeframe]);
+      console.log(`✅ Strategy created in DB: ${name} [${timeframe}] (${type})`);
     } catch (error) {
       console.error('❌ Error ensuring strategy exists:', error);
     }
@@ -104,24 +105,44 @@ export class StrategyRepository {
   }
 
   /**
-   * Update strategy active status
+   * Update strategy active status and track cumulative activation time
+   */
+  static async updateStrategyStatusWithTime(
+    strategyName: string,
+    isActive: boolean,
+    activatedAt: number | null,
+    totalActiveTime: number,
+    timeframe: string = '1m'
+  ): Promise<void> {
+    try {
+      const query = `
+        UPDATE strategies
+        SET is_active = $1, 
+            activated_at = $2,
+            total_active_time = $3,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE name = $4 AND timeframe = $5
+      `;
+      
+      // Convert timestamp to SQL timestamp or NULL
+      const activatedAtSQL = activatedAt ? new Date(activatedAt).toISOString() : null;
+      
+      await pool.query(query, [isActive, activatedAtSQL, totalActiveTime, strategyName, timeframe]);
+      console.log(`✅ Strategy "${strategyName}" [${timeframe}] status updated: ${isActive ? 'ACTIVE' : 'PAUSED'} (total runtime: ${Math.floor(totalActiveTime / 60)}m)`);
+    } catch (error) {
+      console.error('❌ Error updating strategy status with time:', error);
+    }
+  }
+  
+  /**
+   * Update strategy active status (legacy method - kept for compatibility)
    */
   static async updateStrategyStatus(
     strategyName: string,
     isActive: boolean
   ): Promise<void> {
-    try {
-      const query = `
-        UPDATE strategies
-        SET is_active = $1, updated_at = CURRENT_TIMESTAMP
-        WHERE name = $2
-      `;
-      
-      await pool.query(query, [isActive, strategyName]);
-      console.log(`✅ Strategy "${strategyName}" status updated: ${isActive ? 'ON' : 'OFF'}`);
-    } catch (error) {
-      console.error('❌ Error updating strategy status:', error);
-    }
+    // Call new method with default values
+    await this.updateStrategyStatusWithTime(strategyName, isActive, isActive ? Date.now() : null, 0);
   }
 
   /**
@@ -147,12 +168,14 @@ export class StrategyRepository {
       profitTarget?: number;
       stopLoss?: number;
       maxPositionTime?: number;
-    }
+      cooldownPeriod?: number | null;
+    },
+    timeframe: string = '1m'
   ): Promise<void> {
     try {
       // Get current config
-      const currentQuery = `SELECT config FROM strategies WHERE name = $1`;
-      const currentResult = await pool.query(currentQuery, [strategyName]);
+      const currentQuery = `SELECT config FROM strategies WHERE name = $1 AND timeframe = $2`;
+      const currentResult = await pool.query(currentQuery, [strategyName, timeframe]);
       const currentConfig = currentResult.rows[0]?.config || {};
 
       // Merge with new config (null = désactivé)
@@ -160,18 +183,19 @@ export class StrategyRepository {
         ...currentConfig,
         profitTargetPercent: config.profitTarget !== undefined ? config.profitTarget : currentConfig.profitTargetPercent,
         stopLossPercent: config.stopLoss !== undefined ? config.stopLoss : currentConfig.stopLossPercent,
-        maxPositionTime: config.maxPositionTime !== undefined ? config.maxPositionTime : currentConfig.maxPositionTime
+        maxPositionTime: config.maxPositionTime !== undefined ? config.maxPositionTime : currentConfig.maxPositionTime,
+        cooldownPeriod: config.cooldownPeriod !== undefined ? config.cooldownPeriod : currentConfig.cooldownPeriod
       };
 
       // Update in database
       const updateQuery = `
         UPDATE strategies
         SET config = $1, updated_at = CURRENT_TIMESTAMP
-        WHERE name = $2
+        WHERE name = $2 AND timeframe = $3
       `;
       
-      await pool.query(updateQuery, [JSON.stringify(updatedConfig), strategyName]);
-      console.log(`✅ Strategy "${strategyName}" config updated:`, config);
+      await pool.query(updateQuery, [JSON.stringify(updatedConfig), strategyName, timeframe]);
+      console.log(`✅ Strategy "${strategyName}" [${timeframe}] config updated:`, config);
     } catch (error) {
       console.error('❌ Error updating strategy config:', error);
       throw error;

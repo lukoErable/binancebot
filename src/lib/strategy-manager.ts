@@ -1,51 +1,47 @@
 import { Candle, StrategyPerformance } from '@/types/trading';
-import { AtrTrendPullbackStrategy, atrPullbackDefaultConfig } from './atr-pullback-strategy';
-import { BollingerBounceStrategy, defaultBollingerBounceConfig } from './bollinger-bounce-strategy';
 import { CustomStrategy } from './custom-strategy';
 import CustomStrategyRepository from './db/custom-strategy-repository';
+import GlobalStrategyRepository from './db/global-strategy-repository';
 import StrategyRepository from './db/strategy-repository';
-import TradeRepository from './db/trade-repository';
-import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
-import { MomentumCrossoverStrategy, momentumStrategyConfig } from './momentum-strategy';
-import { TrendFollowerStrategy, trendFollowerConfig } from './trend-follower-strategy';
-import { VolumeMACDStrategy, volumeMACDStrategyConfig } from './volume-macd-strategy';
 
 /**
- * Strategy Manager
- * Manages multiple trading strategies simultaneously and tracks their performance
+ * Strategy Manager - Multi-Timeframe Support
+ * Manages multiple trading strategies simultaneously on different timeframes
+ * Key format: "strategyName:timeframe" (e.g., "RSI Strategy:1m", "RSI Strategy:5m")
  */
 export class StrategyManager {
   private strategies: Map<string, {
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | CustomStrategy;
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM';
+    strategy: CustomStrategy;
+    type: 'CUSTOM';
     isActive: boolean;
+    timeframe: string; // '1m', '5m', '15m', '1h', '4h', '1d'
+    activatedAt?: number | null;
+    totalActiveTime?: number;
   }>;
-  private savingSignals: Set<string> = new Set(); // Verrou pour éviter les sauvegardes multiples
 
   constructor() {
     this.strategies = new Map();
     
-    // Initialize default strategies (all OFF by default)
-    this.addStrategy('RSI + EMA Strategy', new TradingStrategy(defaultStrategyConfig), 'RSI_EMA', false);
-    this.addStrategy('Momentum Crossover', new MomentumCrossoverStrategy(momentumStrategyConfig), 'MOMENTUM_CROSSOVER', false);
-    this.addStrategy('Volume Breakout', new VolumeMACDStrategy(volumeMACDStrategyConfig), 'VOLUME_MACD', false);
-    this.addStrategy('Bollinger Bounce', new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', false);
-    this.addStrategy('Trend Follower', new TrendFollowerStrategy(trendFollowerConfig, 'Trend Follower'), 'TREND_FOLLOWER', false);
-    this.addStrategy('ATR Trend Pullback', new AtrTrendPullbackStrategy(atrPullbackDefaultConfig), 'ATR_PULLBACK', false);
-    
-    // Load strategy states from database
-    this.loadFromDatabase();
+    // Load custom strategies from database FIRST
+    this.loadCustomStrategies().then(() => {
+      // Then load strategy states (is_active, activated_at, configs)
+      this.loadFromDatabase();
+    });
+  }
 
-    // Best effort: ensure ATR strategy exists in DB
-    StrategyRepository.ensureStrategyExists(
-      'ATR Trend Pullback',
-      'ATR_PULLBACK',
-      false,
-      { profitTargetPercent: atrPullbackDefaultConfig.profitTargetPercent, stopLossPercent: atrPullbackDefaultConfig.stopLossPercent, maxPositionTime: Math.floor(atrPullbackDefaultConfig.maxPositionTime / (60 * 1000)) }
-    ).catch(() => {});
+  /**
+   * Helper: Generate strategy key for Map storage
+   */
+  private getStrategyKey(name: string, timeframe: string): string {
+    return `${name}:${timeframe}`;
+  }
 
-    // Load custom strategies from database
-    this.loadCustomStrategies();
+  /**
+   * Helper: Parse strategy key back to name and timeframe
+   */
+  private parseStrategyKey(key: string): { name: string; timeframe: string } {
+    const [name, timeframe] = key.split(':');
+    return { name, timeframe: timeframe || '1m' };
   }
 
   /**
@@ -53,62 +49,102 @@ export class StrategyManager {
    */
   private async loadFromDatabase(): Promise<void> {
     try {
+      // Load global strategy states (shared timers)
+      const globalStates = await GlobalStrategyRepository.getAllGlobalStates();
+      console.log(`📥 Loaded ${globalStates.size} global strategy states`);
+      
       // Load strategy activation states and configs
       const strategies = await StrategyRepository.getAllStrategies();
       strategies.forEach((dbStrategy: any) => {
         const strategyName = dbStrategy.name;
+        const timeframe = dbStrategy.timeframe || '1m';
+        const key = this.getStrategyKey(strategyName, timeframe);
         const isActive = dbStrategy.is_active;
         const config = dbStrategy.config || {};
         
-        if (this.strategies.has(strategyName)) {
-          const strategyData = this.strategies.get(strategyName)!;
+        if (this.strategies.has(key)) {
+          const strategyData = this.strategies.get(key)!;
           strategyData.isActive = isActive;
           
-          // Apply config if available
-          if (config.profitTargetPercent !== undefined || config.stopLossPercent !== undefined || config.maxPositionTime !== undefined) {
-            const strategy = strategyData.strategy as any;
-            if (strategy.config) {
-              if (config.profitTargetPercent !== undefined) {
-                strategy.config.profitTargetPercent = config.profitTargetPercent;
+          // Use GLOBAL state for timer (shared across all timeframes)
+          const globalState = globalStates.get(strategyName);
+          if (globalState) {
+            // Use global shared timer
+            strategyData.totalActiveTime = globalState.totalActiveTime;
+            
+            if (isActive && globalState.isGloballyActive && globalState.activatedAt) {
+              // Strategy is globally active - use shared timestamp
+              strategyData.activatedAt = globalState.activatedAt;
+              console.log(`  └─ [${timeframe}] ACTIVE with global timer: ${Math.floor(globalState.totalActiveTime / 60)}m`);
+            } else if (isActive) {
+              // Strategy is active but no global timestamp yet - create one
+              strategyData.activatedAt = Date.now();
+              // Update global state
+              GlobalStrategyRepository.updateGlobalState(strategyName, true, Date.now(), globalState.totalActiveTime)
+                .catch(err => console.error('Failed to update global state:', err));
+            } else {
+              // Strategy is inactive
+              strategyData.activatedAt = null;
+            }
+          } else {
+            // No global state found - use local state and create global state
+            strategyData.totalActiveTime = dbStrategy.total_active_time || 0;
+            const activatedAtDb = dbStrategy.activated_at;
+            
+            if (isActive && activatedAtDb) {
+              // Checkpoint logic for server restart
+              const oldActivatedAt = new Date(activatedAtDb).getTime();
+              const elapsedBeforeRestart = Math.floor((Date.now() - oldActivatedAt) / 1000);
+              
+              if (elapsedBeforeRestart < 600) {
+                strategyData.totalActiveTime = (strategyData.totalActiveTime || 0) + elapsedBeforeRestart;
+                console.log(`⏱️ Checkpoint: Added ${elapsedBeforeRestart}s to "${strategyName}" [${timeframe}]`);
               }
-              if (config.stopLossPercent !== undefined) {
-                strategy.config.stopLossPercent = config.stopLossPercent;
-              }
-              if (config.maxPositionTime !== undefined) {
-                // Convert minutes to milliseconds for strategy config
-                strategy.config.maxPositionTime = config.maxPositionTime * 60 * 1000;
-              }
-              console.log(`⚙️ Loaded custom config for ${strategyName}:`, {
-                TP: config.profitTargetPercent,
-                SL: config.stopLossPercent,
-                MaxPosMin: config.maxPositionTime,
-                MaxPosMs: config.maxPositionTime ? config.maxPositionTime * 60 * 1000 : undefined
-              });
+              
+              strategyData.activatedAt = Date.now();
+              
+              // Create global state
+              GlobalStrategyRepository.updateGlobalState(strategyName, true, Date.now(), strategyData.totalActiveTime || 0)
+                .catch(err => console.error('Failed to create global state:', err));
+            } else if (isActive) {
+              strategyData.activatedAt = Date.now();
+            } else {
+              strategyData.activatedAt = null;
             }
           }
           
-          console.log(`📊 Loaded strategy state: ${strategyName} = ${isActive ? 'ON' : 'OFF'}`);
+          // Apply config if available (TP/SL/MaxPos/Cooldown)
+          const strategy = strategyData.strategy as any;
+          if (strategy.config) {
+            if (config.profitTargetPercent !== undefined) {
+              strategy.config.profitTargetPercent = config.profitTargetPercent;
+            }
+            if (config.stopLossPercent !== undefined) {
+              strategy.config.stopLossPercent = config.stopLossPercent;
+            }
+            if (config.maxPositionTime !== undefined) {
+              strategy.config.maxPositionTime = config.maxPositionTime * 60 * 1000;
+            }
+            if (config.cooldownPeriod !== undefined) {
+              strategy.config.cooldownPeriod = config.cooldownPeriod;
+            }
+          }
+          
+          const totalMinutes = Math.floor((strategyData.totalActiveTime || 0) / 60);
+          const currentMinutes = strategyData.activatedAt ? Math.floor((Date.now() - strategyData.activatedAt) / 60000) : 0;
+          console.log(`📊 Loaded strategy state: ${strategyName} [${timeframe}] = ${isActive ? 'ON' : 'OFF'} (total: ${totalMinutes}m${currentMinutes > 0 ? ' + current: ' + currentMinutes + 'm' : ''})`);
         }
       });
 
-      // Load trade history for each strategy
-      for (const [strategyName, strategyData] of this.strategies) {
+      // Restore completed trades and open positions for all strategies
+      for (const [key, strategyData] of this.strategies) {
+        const { name } = this.parseStrategyKey(key);
         try {
-          const trades = await TradeRepository.getTradesByStrategy(strategyName, 100);
-          if (trades.length > 0) {
-            console.log(`📈 Loaded ${trades.length} signals for ${strategyName}`);
-            // Restore strategy state from trades
-            if ('restoreFromDatabase' in strategyData.strategy) {
-              const restoreMethod = (strategyData.strategy as any).restoreFromDatabase;
-              // Call with await if it returns a Promise
-              const result = restoreMethod.call(strategyData.strategy, trades);
-              if (result instanceof Promise) {
-                await result;
-              }
-            }
+          if ('restoreFromDatabase' in strategyData.strategy) {
+            await (strategyData.strategy as any).restoreFromDatabase();
           }
         } catch (error) {
-          console.error(`❌ Error loading trades for ${strategyName}:`, error);
+          console.error(`❌ Error restoring ${name} [${strategyData.timeframe}]:`, error);
         }
       }
     } catch (error) {
@@ -123,23 +159,64 @@ export class StrategyManager {
     try {
       const customConfigs = await CustomStrategyRepository.getAllCustomStrategies();
       
-      for (const config of customConfigs) {
-        console.log(`📦 Loading custom strategy: ${config.name}`);
-        const strategy = new CustomStrategy(config);
-        // Use isActive from DB, default to true if not specified
-        const isActive = config.isActive !== undefined ? config.isActive : true;
-        this.addStrategy(config.name, strategy, 'CUSTOM' as any, isActive);
-        
-        // Load trade history for custom strategy
-        try {
-          const trades = await TradeRepository.getTradesByStrategy(config.name, 100);
-          if (trades.length > 0 && 'restoreFromDatabase' in strategy) {
-            console.log(`📈 Loaded ${trades.length} signals for custom strategy ${config.name}`);
-            await (strategy as any).restoreFromDatabase(trades);
-          }
-        } catch (error) {
-          console.error(`❌ Error loading trades for custom strategy ${config.name}:`, error);
+      // Load global states (shared timers)
+      const globalStates = await GlobalStrategyRepository.getAllGlobalStates();
+      
+      // Also get activated_at and total_active_time from strategies table
+      const strategiesData = await StrategyRepository.getAllStrategies();
+      const activatedAtMap = new Map<string, number | null>();
+      const totalActiveTimeMap = new Map<string, number>();
+      strategiesData.forEach((dbStrategy: any) => {
+        const key = this.getStrategyKey(dbStrategy.name, dbStrategy.timeframe || '1m');
+        if (dbStrategy.activated_at) {
+          activatedAtMap.set(key, new Date(dbStrategy.activated_at).getTime());
+        } else {
+          activatedAtMap.set(key, null);
         }
+        totalActiveTimeMap.set(key, dbStrategy.total_active_time || 0);
+      });
+      
+      for (const config of customConfigs) {
+        const timeframe = config.timeframe || '1m';
+        const key = this.getStrategyKey(config.name, timeframe);
+        console.log(`📦 Loading custom strategy: ${config.name} [${timeframe}]`);
+        const strategy = new CustomStrategy(config);
+        const isActive = config.isActive !== undefined ? config.isActive : true;
+        
+        // Use GLOBAL state for timer
+        const globalState = globalStates.get(config.name);
+        const totalActiveTime = globalState?.totalActiveTime || totalActiveTimeMap.get(key) || 0;
+        const activatedAt = (isActive && globalState?.isGloballyActive && globalState?.activatedAt) 
+          ? globalState.activatedAt 
+          : (isActive ? Date.now() : null);
+        
+        this.strategies.set(key, {
+          strategy,
+          type: 'CUSTOM',
+          isActive,
+          timeframe,
+          activatedAt,
+          totalActiveTime
+        });
+        
+        // Ensure global state exists
+        if (!globalState) {
+          GlobalStrategyRepository.ensureGlobalStateExists(config.name)
+            .catch(err => console.error('Failed to ensure global state:', err));
+        }
+        
+        // Update database to reset activatedAt for active strategies
+        if (isActive) {
+          StrategyRepository.updateStrategyStatusWithTime(
+            config.name,
+            true,
+            activatedAt,
+            totalActiveTime,
+            timeframe
+          ).catch(err => console.error('Failed to update activatedAt on load:', err));
+        }
+        
+        console.log(`✅ Added custom strategy: ${config.name} [${timeframe}] (${isActive ? 'ACTIVE' : 'INACTIVE'}) - Total runtime: ${Math.floor(totalActiveTime / 60)}m${isActive ? ' (session restarted)' : ''}`);
       }
       
       console.log(`✅ Loaded ${customConfigs.length} custom strategies`);
@@ -149,50 +226,121 @@ export class StrategyManager {
   }
 
   /**
-   * Add a new strategy
+   * Add a new strategy for a specific timeframe
    */
   addStrategy(
     name: string,
-    strategy: TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | CustomStrategy,
-    type: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM',
+    strategy: CustomStrategy,
+    type: 'CUSTOM',
+    timeframe: string = '1m',
     isActive: boolean = true
   ): void {
-    this.strategies.set(name, { strategy, type, isActive });
-    console.log(`✅ Strategy "${name}" added (${type})`);
+    const key = this.getStrategyKey(name, timeframe);
+    this.strategies.set(key, { strategy, type, isActive, timeframe });
+    console.log(`✅ Strategy "${name}" [${timeframe}] added (${type})`);
   }
 
   /**
-   * Remove a strategy
+   * Remove a strategy from a specific timeframe
    */
-  removeStrategy(name: string): boolean {
-    const removed = this.strategies.delete(name);
+  removeStrategy(name: string, timeframe: string = '1m'): boolean {
+    const key = this.getStrategyKey(name, timeframe);
+    const removed = this.strategies.delete(key);
     if (removed) {
-      console.log(`🗑️ Strategy "${name}" removed`);
+      console.log(`🗑️ Strategy "${name}" [${timeframe}] removed`);
     }
     return removed;
   }
 
   /**
-   * Toggle strategy active state
+   * Toggle strategy active state for a specific timeframe
+   * Now uses global shared timer across all timeframes
    */
-  toggleStrategy(name: string): boolean {
-    const strategyData = this.strategies.get(name);
-    if (strategyData) {
-      strategyData.isActive = !strategyData.isActive;
-      console.log(`🔄 Strategy "${name}" is now ${strategyData.isActive ? 'ACTIVE' : 'INACTIVE'}`);
-      
-      // Update status in database (async, non-blocking)
-      StrategyRepository.updateStrategyStatus(name, strategyData.isActive).catch(err => {
-        console.error(`Failed to update strategy status in DB:`, err);
-      });
-      
-      return strategyData.isActive;
+  async toggleStrategy(name: string, timeframe: string = '1m'): Promise<boolean> {
+    const key = this.getStrategyKey(name, timeframe);
+    const strategyData = this.strategies.get(key);
+    if (!strategyData) return false;
+
+    const wasActive = strategyData.isActive;
+    const newState = !strategyData.isActive;
+    
+    // Get current global state
+    const globalState = await GlobalStrategyRepository.getGlobalState(name);
+    let globalTotalTime = globalState?.totalActiveTime || 0;
+    let globalActivatedAt = globalState?.activatedAt || null;
+    
+    if (newState) {
+      // Activating: Use shared global timestamp
+      if (!globalActivatedAt) {
+        globalActivatedAt = Date.now();
+      }
+      strategyData.activatedAt = globalActivatedAt;
+      strategyData.isActive = true;
+      console.log(`🔄 Strategy "${name}" [${timeframe}] ACTIVATED (global timer: ${Math.floor(globalTotalTime / 60)}m)`);
+    } else {
+      // Deactivating: Add elapsed time to global total
+      if (globalActivatedAt) {
+        const elapsedSeconds = Math.floor((Date.now() - globalActivatedAt) / 1000);
+        globalTotalTime = globalTotalTime + elapsedSeconds;
+        console.log(`⏸️ Strategy "${name}" [${timeframe}] PAUSED (session: ${elapsedSeconds}s, global total: ${globalTotalTime}s)`);
+      }
+      globalActivatedAt = null;
+      strategyData.activatedAt = null;
+      strategyData.isActive = false;
     }
-    return false;
+    
+    // Update global shared time for all instances
+    strategyData.totalActiveTime = globalTotalTime;
+    
+    // Save global state
+    await GlobalStrategyRepository.updateGlobalState(
+      name,
+      newState,
+      globalActivatedAt,
+      globalTotalTime
+    );
+    
+    // Also save to per-timeframe table for backward compatibility
+    await StrategyRepository.updateStrategyStatusWithTime(
+      name,
+      newState,
+      globalActivatedAt,
+      globalTotalTime,
+      timeframe
+    );
+    
+    return newState;
   }
 
   /**
-   * Update strategy configuration (TP, SL, Max Position Time)
+   * Synchronous version for backward compatibility
+   */
+  toggleStrategySync(name: string, timeframe: string = '1m'): boolean {
+    this.toggleStrategy(name, timeframe).catch(err => {
+      console.error('Error toggling strategy:', err);
+    });
+    
+    const key = this.getStrategyKey(name, timeframe);
+    const strategyData = this.strategies.get(key);
+    return strategyData?.isActive || false;
+  }
+
+  /**
+   * Sync timer for all instances of a strategy (after toggle)
+   */
+  async syncGlobalTimer(name: string, activatedAt: number | null, totalActiveTime: number): Promise<void> {
+    // Update all instances of this strategy across all timeframes
+    this.strategies.forEach((strategyData, key) => {
+      const { name: strategyName } = this.parseStrategyKey(key);
+      if (strategyName === name) {
+        strategyData.activatedAt = activatedAt;
+        strategyData.totalActiveTime = totalActiveTime;
+      }
+    });
+  }
+
+  /**
+   * Update strategy configuration for a specific timeframe
    */
   updateStrategyConfig(
     name: string,
@@ -200,13 +348,15 @@ export class StrategyManager {
       profitTarget?: number | null;
       stopLoss?: number | null;
       maxPositionTime?: number | null;
-    }
+      cooldownPeriod?: number | null;
+    },
+    timeframe: string = '1m'
   ): boolean {
-    const strategyData = this.strategies.get(name);
+    const key = this.getStrategyKey(name, timeframe);
+    const strategyData = this.strategies.get(key);
     if (strategyData) {
       const strategy = strategyData.strategy as any;
       if (strategy.config) {
-        // null = désactivé, on garde l'ancienne valeur mais on pourrait aussi mettre Infinity
         if (config.profitTarget !== undefined && config.profitTarget !== null) {
           strategy.config.profitTargetPercent = config.profitTarget;
         }
@@ -214,24 +364,25 @@ export class StrategyManager {
           strategy.config.stopLossPercent = config.stopLoss;
         }
         if (config.maxPositionTime !== undefined && config.maxPositionTime !== null) {
-          // Convert minutes to milliseconds for strategy config
           strategy.config.maxPositionTime = config.maxPositionTime * 60 * 1000;
         }
+        // Handle cooldownPeriod: null = disabled (0), otherwise use the value
+        if (config.cooldownPeriod !== undefined) {
+          strategy.config.cooldownPeriod = config.cooldownPeriod === null ? 0 : config.cooldownPeriod;
+        }
         
-        console.log(`⚙️ Updated config for "${name}":`, {
+        console.log(`⚙️ Updated config for "${name}" [${timeframe}]:`, {
           TP: config.profitTarget,
           SL: config.stopLoss,
           MaxPosMin: config.maxPositionTime,
-          MaxPosMs: config.maxPositionTime ? config.maxPositionTime * 60 * 1000 : null
+          MaxPosMs: config.maxPositionTime ? config.maxPositionTime * 60 * 1000 : null,
+          CooldownMs: config.cooldownPeriod
         });
         
         // If there's an active position, log that new params will be applied
         const positionInfo = strategy.getPositionInfo();
         if (positionInfo.position && positionInfo.position.type !== 'NONE') {
           console.log(`🔄 Active ${positionInfo.position.type} position detected - New TP/SL will be applied on next price update`);
-          console.log(`   Entry: $${positionInfo.position.entryPrice.toFixed(2)}`);
-          console.log(`   Current P&L: ${positionInfo.position.unrealizedPnLPercent?.toFixed(2)}%`);
-          console.log(`   New TP: ${config.profitTarget}% | New SL: -${config.stopLoss}%`);
         }
         
         return true;
@@ -241,33 +392,27 @@ export class StrategyManager {
   }
 
   /**
-   * Analyze market with all active strategies
+   * Analyze market with all active strategies for a specific timeframe
    */
-  async analyzeAllStrategies(candles: Candle[]): Promise<void> {
-    for (const [name, strategyData] of this.strategies) {
+  async analyzeStrategiesForTimeframe(candles: Candle[], timeframe: string = '1m'): Promise<void> {
+    for (const [key, strategyData] of this.strategies) {
+      // Only analyze strategies for this timeframe
+      if (strategyData.timeframe !== timeframe) continue;
       if (!strategyData.isActive) continue;
 
+      const { name } = this.parseStrategyKey(key);
       const signal = strategyData.strategy.analyzeMarket(candles);
       if (signal && signal.type !== 'HOLD') {
-        console.log(`[${name}] Signal: ${signal.type} at $${signal.price.toFixed(2)} | ${signal.reason}`);
+        console.log(`[${name}] [${timeframe}] Signal: ${signal.type} at $${signal.price.toFixed(2)} | ${signal.reason}`);
         
-        // Vérifier et sauvegarder AVANT d'exécuter le trade (pour ne pas modifier lastSignal)
         const isPositionSignal = signal.type === 'BUY' || signal.type === 'SELL' || 
                                  signal.type === 'CLOSE_LONG' || signal.type === 'CLOSE_SHORT';
         
         if (isPositionSignal) {
-          // Récupérer le lastSignal AVANT executeTrade
           const positionInfo = strategyData.strategy.getPositionInfo();
-          const lastSignal = positionInfo.lastSignal;
           const currentPosition = positionInfo.position;
           
-          // Duplicata = même type + même prix exact + moins de 2 secondes
-          const isMemoryDuplicate = lastSignal && 
-                                   lastSignal.type === signal.type && 
-                                   Math.abs(lastSignal.price - signal.price) < 0.5 &&
-                                   (signal.timestamp - lastSignal.timestamp) < 2000;
-          
-          // Check si on essaie d'ouvrir une position alors qu'on en a déjà une
+          // Check if trying to enter duplicate position
           const isEntrySignal = signal.type === 'BUY' || signal.type === 'SELL';
           const hasPosition = currentPosition && currentPosition.type !== 'NONE';
           const isDuplicateEntry = isEntrySignal && hasPosition && 
@@ -279,41 +424,9 @@ export class StrategyManager {
             continue;
           }
           
-          if (!isMemoryDuplicate) {
-            // Créer une clé unique (sans timestamp pour éviter les doublons à la milliseconde près)
-            const signalKey = `${name}-${signal.type}-${signal.price.toFixed(2)}`;
-            
-            // Vérifier si ce signal est déjà en cours de sauvegarde (ATOMIC CHECK + ADD)
-            if (this.savingSignals.has(signalKey)) {
-              console.log(`⏭️  Signal already being saved: ${signal.type} @ ${signal.price.toFixed(2)}`);
-              continue; // Skip to next strategy (not return)
-            }
-            
-            // Marquer comme en cours de sauvegarde AVANT l'await (synchrone, donc atomic)
-            this.savingSignals.add(signalKey);
-            console.log(`💾 Saving ${signal.type} signal to DB: ${signal.type} @ ${signal.price.toFixed(2)}`);
-            
-            try {
-              // Attendre que la sauvegarde soit terminée avant d'exécuter le trade
-              await TradeRepository.saveTrade(name, strategyData.type, signal);
-              
-              // Exécuter le trade SEULEMENT après la sauvegarde
-              strategyData.strategy.executeTrade(signal);
-            } catch (err) {
-              console.error(`Failed to save trade for ${name}:`, err);
-              // Remove from saving set if save failed
-              this.savingSignals.delete(signalKey);
-              continue; // Skip to next strategy
-            } finally {
-              // Retirer du verrou après un délai plus long (10 secondes pour les scalping strategies)
-              setTimeout(() => this.savingSignals.delete(signalKey), 10000);
-            }
-          } else {
-            console.log(`⏭️  Skipping duplicate: ${signal.type} @ ${signal.price.toFixed(2)} (saved ${((signal.timestamp - lastSignal.timestamp) / 1000).toFixed(1)}s ago)`);
-            // Ne pas exécuter executeTrade pour les duplicatas
-          }
+          // Execute trade directly
+          strategyData.strategy.executeTrade(signal);
         } else {
-          // Pour les autres types de signaux, exécuter normalement
           strategyData.strategy.executeTrade(signal);
         }
       }
@@ -321,14 +434,29 @@ export class StrategyManager {
   }
 
   /**
-   * Update all strategies with current market price for real-time P&L calculation
+   * Legacy method: Analyze all strategies (defaults to 1m timeframe for backward compatibility)
    */
-  updateAllStrategiesWithCurrentPrice(currentPrice: number): void {
-    this.strategies.forEach((strategyData) => {
+  async analyzeAllStrategies(candles: Candle[]): Promise<void> {
+    await this.analyzeStrategiesForTimeframe(candles, '1m');
+  }
+
+  /**
+   * Update all strategies with current market price for a specific timeframe
+   */
+  updateStrategiesWithCurrentPrice(currentPrice: number, timeframe: string = '1m'): void {
+    this.strategies.forEach((strategyData, key) => {
+      if (strategyData.timeframe !== timeframe) return;
       if (strategyData.isActive && 'updatePositionWithCurrentPrice' in strategyData.strategy) {
         (strategyData.strategy as any).updatePositionWithCurrentPrice(currentPrice);
       }
     });
+  }
+
+  /**
+   * Legacy method: Update all strategies (defaults to 1m timeframe for backward compatibility)
+   */
+  updateAllStrategiesWithCurrentPrice(currentPrice: number): void {
+    this.updateStrategiesWithCurrentPrice(currentPrice, '1m');
   }
 
   /**
@@ -337,48 +465,38 @@ export class StrategyManager {
   getAllPerformances(): StrategyPerformance[] {
     const performances: StrategyPerformance[] = [];
 
-    this.strategies.forEach((strategyData, name) => {
+    this.strategies.forEach((strategyData, key) => {
+      const { name } = this.parseStrategyKey(key);
       const positionInfo = strategyData.strategy.getPositionInfo();
       const winRate = positionInfo.totalTrades > 0 
         ? (positionInfo.winningTrades / positionInfo.totalTrades) * 100 
         : 0;
 
-      // Extract config from strategy
       const strategy = strategyData.strategy as any;
       const strategyConfig = strategy.config ? {
         profitTargetPercent: strategy.config.profitTargetPercent,
         stopLossPercent: strategy.config.stopLossPercent,
-        // Convert milliseconds back to minutes for display
         maxPositionTime: strategy.config.maxPositionTime ? strategy.config.maxPositionTime / (60 * 1000) : undefined
       } : undefined;
 
-      // For CUSTOM strategies, include the full config for UI display
-      const customConfig = strategyData.type === 'CUSTOM' && strategy.config ? strategy.config : undefined;
+      const customConfig = strategy.config ? strategy.config : undefined;
 
       performances.push({
         strategyName: name,
-        strategyType: strategyData.type as 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM',
+        strategyType: 'CUSTOM',
+        timeframe: strategyData.timeframe, // Add timeframe to performance
         totalPnL: positionInfo.totalPnL,
         totalTrades: positionInfo.totalTrades,
         winningTrades: positionInfo.winningTrades,
         winRate,
         currentPosition: positionInfo.position,
-        lastSignal: positionInfo.lastSignal || null,
-        signalHistory: positionInfo.signalHistory || [],
         completedTrades: 'completedTrades' in positionInfo ? (positionInfo as any).completedTrades : undefined,
         isActive: strategyData.isActive,
+        activatedAt: strategyData.activatedAt,
+        totalActiveTime: strategyData.totalActiveTime || 0,
         currentCapital: positionInfo.currentCapital || 100000,
         config: strategyConfig,
-        customConfig: customConfig, // Full custom strategy config
-        // Include strategy-specific flags
-        isBullishCrossover: 'isBullishCrossover' in positionInfo ? (positionInfo as any).isBullishCrossover : undefined,
-        isBearishCrossover: 'isBearishCrossover' in positionInfo ? (positionInfo as any).isBearishCrossover : undefined,
-        isVolumeBreakout: 'isVolumeBreakout' in positionInfo ? (positionInfo as any).isVolumeBreakout : undefined,
-        isMACDBullish: 'isMACDBullish' in positionInfo ? (positionInfo as any).isMACDBullish : undefined,
-        isMACDBearish: 'isMACDBearish' in positionInfo ? (positionInfo as any).isMACDBearish : undefined,
-        isPriceAccelerating: 'isPriceAccelerating' in positionInfo ? (positionInfo as any).isPriceAccelerating : undefined,
-        isVolatilityHigh: 'isVolatilityHigh' in positionInfo ? (positionInfo as any).isVolatilityHigh : undefined,
-        isMomentumStrong: 'isMomentumStrong' in positionInfo ? (positionInfo as any).isMomentumStrong : undefined
+        customConfig
       });
     });
 
@@ -406,14 +524,15 @@ export class StrategyManager {
   }
 
   /**
-   * Get strategy by name
+   * Get strategy by name and timeframe
    */
-  getStrategy(name: string): TradingStrategy | MomentumCrossoverStrategy | VolumeMACDStrategy | BollingerBounceStrategy | TrendFollowerStrategy | AtrTrendPullbackStrategy | CustomStrategy | undefined {
-    return this.strategies.get(name)?.strategy;
+  getStrategy(name: string, timeframe: string = '1m'): CustomStrategy | undefined {
+    const key = this.getStrategyKey(name, timeframe);
+    return this.strategies.get(key)?.strategy;
   }
 
   /**
-   * Get all strategy names
+   * Get all strategy names (returns keys in "name:timeframe" format)
    */
   getStrategyNames(): string[] {
     return Array.from(this.strategies.keys());
@@ -428,70 +547,55 @@ export class StrategyManager {
   }
 
   /**
-   * Reset a specific strategy (clear its state and database records)
+   * Reset a specific strategy for a specific timeframe
    */
-  async resetStrategy(name: string): Promise<boolean> {
-    const strategyData = this.strategies.get(name);
+  async resetStrategy(name: string, timeframe: string = '1m'): Promise<boolean> {
+    const key = this.getStrategyKey(name, timeframe);
+    const strategyData = this.strategies.get(key);
     if (!strategyData) {
-      console.error(`Strategy "${name}" not found`);
+      console.error(`Strategy "${name}" [${timeframe}] not found`);
       return false;
     }
 
     try {
-      // Delete all signals from database
-      await TradeRepository.deleteStrategyTrades(name);
-      
-      // Delete all completed trades from database
       const { CompletedTradeRepository } = await import('./db/completed-trade-repository');
       await CompletedTradeRepository.deleteStrategyCompletedTrades(name);
-      
-      // Delete open position from database
       const { default: OpenPositionRepository } = await import('./db/open-position-repository');
-      await OpenPositionRepository.deleteOpenPosition(name);
+      await OpenPositionRepository.deleteOpenPosition(name, timeframe);
+
+      const wasActive = strategyData.isActive;
       
-      // Reset strategy state by removing and re-adding it
-      const strategyType = strategyData.type;
-      const strategy = strategyData.strategy;
-      const wasActive = strategyData.isActive; // Conserver l'état actif
+      // Reset total active time in database
+      await StrategyRepository.updateStrategyStatusWithTime(
+        name,
+        wasActive,
+        wasActive ? Date.now() : null,
+        0, // Reset cumulative time to 0
+        timeframe
+      );
       
-      // Remove old strategy
-      this.strategies.delete(name);
-      
-      // Re-add fresh strategy based on type (keep active state)
-      if (strategyType === 'RSI_EMA') {
-        const { TradingStrategy, defaultStrategyConfig } = await import('./ema-rsi-strategy');
-        this.addStrategy(name, new TradingStrategy(defaultStrategyConfig), 'RSI_EMA', wasActive);
-      } else if (strategyType === 'MOMENTUM_CROSSOVER') {
-        const { MomentumCrossoverStrategy, momentumStrategyConfig } = await import('./momentum-strategy');
-        this.addStrategy(name, new MomentumCrossoverStrategy(momentumStrategyConfig), 'MOMENTUM_CROSSOVER', wasActive);
-      } else if (strategyType === 'VOLUME_MACD') {
-        const { VolumeMACDStrategy, volumeMACDStrategyConfig } = await import('./volume-macd-strategy');
-        this.addStrategy(name, new VolumeMACDStrategy(volumeMACDStrategyConfig), 'VOLUME_MACD', wasActive);
-      } else if (strategyType === 'BOLLINGER_BOUNCE') {
-        const { BollingerBounceStrategy, defaultBollingerBounceConfig } = await import('./bollinger-bounce-strategy');
-        this.addStrategy(name, new BollingerBounceStrategy(defaultBollingerBounceConfig), 'BOLLINGER_BOUNCE', wasActive);
-      } else if (strategyType === 'TREND_FOLLOWER') {
-        const { TrendFollowerStrategy, trendFollowerConfig } = await import('./trend-follower-strategy');
-        this.addStrategy(name, new TrendFollowerStrategy(trendFollowerConfig, name), 'TREND_FOLLOWER', wasActive);
-      } else if (strategyType === 'ATR_PULLBACK') {
-        const { AtrTrendPullbackStrategy, atrPullbackDefaultConfig } = await import('./atr-pullback-strategy');
-        this.addStrategy(name, new AtrTrendPullbackStrategy(atrPullbackDefaultConfig), 'ATR_PULLBACK', wasActive);
-      } else if (strategyType === 'CUSTOM') {
-        // For CUSTOM strategies, reload from database
-        const { CustomStrategyRepository } = await import('./db/custom-strategy-repository');
-        const customConfig = await CustomStrategyRepository.loadCustomStrategy(name);
-        if (customConfig) {
-          const { CustomStrategy } = await import('./custom-strategy');
-          this.addStrategy(name, new CustomStrategy(customConfig), 'CUSTOM', wasActive);
-        }
+      this.strategies.delete(key);
+
+      const cfg = await CustomStrategyRepository.loadCustomStrategy(name);
+      if (cfg) {
+        // Ensure the config has the correct timeframe
+        cfg.timeframe = timeframe;
+        const fresh = new CustomStrategy(cfg);
+        this.strategies.set(key, {
+          strategy: fresh,
+          type: 'CUSTOM',
+          isActive: wasActive,
+          timeframe,
+          activatedAt: wasActive ? Date.now() : null,
+          totalActiveTime: 0
+        });
       }
-      
-      console.log(`✅ Strategy "${name}" has been reset to initial state`);
+
+      console.log(`✅ Strategy "${name}" [${timeframe}] has been reset to initial state (active time: 0)`);
       return true;
     } catch (error) {
-      console.error(`❌ Error resetting strategy "${name}":`, error);
+      console.error(`❌ Error resetting strategy "${name}" [${timeframe}]:`, error);
       return false;
     }
   }
 }
-

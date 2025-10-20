@@ -56,6 +56,7 @@ export interface CompletedTrade {
   exitReason: string; // TP, SL, Trend Reversal, etc.
   entryReason: string;
   isWin: boolean;
+  timeframe: string; // Timeframe on which this trade was executed (1m, 5m, 15m, 1h, 4h, 1d)
 }
 
 export interface StrategyState {
@@ -228,15 +229,16 @@ export interface StrategyConfig {
 export interface StrategyPerformance {
   strategyName: string;
   strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM';
+  timeframe: string; // Timeframe on which this strategy is running (e.g., '1m', '5m', '15m')
   totalPnL: number;
   totalTrades: number;
   winningTrades: number;
   winRate: number;
   currentPosition: Position;
-  lastSignal: TradingSignal | null;
-  signalHistory: TradingSignal[];
   completedTrades?: CompletedTrade[]; // Trades complets (entrée + sortie)
   isActive: boolean;
+  activatedAt?: number | null; // Timestamp when strategy was last activated (null if inactive)
+  totalActiveTime?: number; // Cumulative active time in seconds
   currentCapital: number; // Capital actuel (initial + P&L)
   // Strategy config (TP, SL, Max Position) - null = désactivé
   config?: {

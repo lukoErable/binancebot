@@ -2,7 +2,8 @@
 
 import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { StrategyPerformance, StrategyState } from '@/types/trading';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { HiChevronDown, HiClock } from 'react-icons/hi';
 import BinanceChart from './BinanceChart';
 import {
   ChartSkeleton,
@@ -16,6 +17,7 @@ import {
 } from './SkeletonLoader';
 import StrategyBuilder from './StrategyBuilder';
 import StrategyPanel from './StrategyPanel';
+import TimeframeComparison from './TimeframeComparison';
 import TradingHistory from './TradingHistory';
 
 // Extend Window interface for tradingEventSource
@@ -30,11 +32,38 @@ export default function Dashboard() {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [selectedTimeframe, setSelectedTimeframe] = useState('1m');
+  const [isChangingTimeframe, setIsChangingTimeframe] = useState(false);
   const [strategyPerformances, setStrategyPerformances] = useState<StrategyPerformance[]>([]);
   const [localConfigCache, setLocalConfigCache] = useState<Record<string, { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }>>({});
   const [selectedStrategy, setSelectedStrategy] = useState<string>('GLOBAL'); // 'GLOBAL' or strategy name
   const [showStrategyBuilder, setShowStrategyBuilder] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+  const [isStatsSticky, setIsStatsSticky] = useState(false);
+  const statsSentinelRef = useRef<HTMLDivElement>(null);
+  const [showTimeframeComparison, setShowTimeframeComparison] = useState(false);
+  const [comparisonStrategyName, setComparisonStrategyName] = useState<string | null>(null);
+  const [allTimeframePerformances, setAllTimeframePerformances] = useState<StrategyPerformance[]>([]);
+  const [showAllPositions, setShowAllPositions] = useState(false);
+
+  // Detect when stats bar becomes sticky using IntersectionObserver
+  useEffect(() => {
+    const sentinel = statsSentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        // When sentinel is not visible, stats bar is sticky
+        setIsStatsSticky(!entry.isIntersecting);
+      },
+      { 
+        threshold: 0,
+        rootMargin: '-57px 0px 0px 0px' // Offset by header height
+      }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
 
   const startDataStream = async (timeframe?: string, trading?: boolean) => {
     const tf = timeframe || selectedTimeframe;
@@ -50,6 +79,7 @@ export default function Dashboard() {
           setState(data);
           setIsConnected(data.isConnected);
           setIsConnecting(false);
+          setIsChangingTimeframe(false); // Désactiver le loading quand les nouvelles données arrivent
         } catch (error) {
           console.error('Error parsing SSE data:', error);
         }
@@ -59,6 +89,7 @@ export default function Dashboard() {
         console.error('SSE Error:', error);
         setIsConnected(false);
         setIsConnecting(false);
+        setIsChangingTimeframe(false);
         eventSource.close();
       };
 
@@ -91,7 +122,7 @@ export default function Dashboard() {
 
   const handleToggleStrategy = async (strategyName: string) => {
     try {
-      await fetch(`/api/trading?action=toggleStrategy&strategyName=${encodeURIComponent(strategyName)}`);
+      await fetch(`/api/trading?action=toggleStrategy&strategyName=${encodeURIComponent(strategyName)}&timeframe=${selectedTimeframe}`);
       // No need to refresh - data comes via SSE
     } catch (error) {
       console.error('Error toggling strategy:', error);
@@ -106,16 +137,26 @@ export default function Dashboard() {
 
   const handleSaveStrategy = async (config: CustomStrategyConfig) => {
     try {
-      const response = await fetch('/api/custom-strategy', {
+      // Create strategy on ALL timeframes
+      const allTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+      
+      console.log(`🚀 Creating strategy "${config.name}" on all timeframes...`);
+      
+      // Use multi-timeframe API to create on all TFs at once
+      const response = await fetch('/api/multi-timeframe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
+        body: JSON.stringify({
+          strategyName: config.name,
+          timeframes: allTimeframes,
+          config // Pass the full config
+        })
       });
       
       const data = await response.json();
       
       if (response.ok) {
-        console.log(`✅ Strategy "${config.name}" created successfully!`);
+        console.log(`✅ Strategy "${config.name}" created on ${allTimeframes.length} timeframes!`);
         setShowStrategyBuilder(false);
         // Reload to see the new strategy
         window.location.reload();
@@ -189,17 +230,22 @@ export default function Dashboard() {
       
       console.log('✅ Strategy generated:', generatedStrategy.name);
 
-      // Sauvegarder automatiquement la stratégie
-      const saveResponse = await fetch('/api/custom-strategy', {
+      // Save strategy on ALL timeframes using multi-timeframe API
+      const allTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+      const saveResponse = await fetch('/api/multi-timeframe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(generatedStrategy)
+        body: JSON.stringify({
+          strategyName: generatedStrategy.name,
+          timeframes: allTimeframes,
+          config: generatedStrategy
+        })
       });
 
       const saveData = await saveResponse.json();
 
       if (saveResponse.ok) {
-        console.log(`✨ AI Strategy "${generatedStrategy.name}" created successfully!`);
+        console.log(`✨ AI Strategy "${generatedStrategy.name}" created on all timeframes!`);
         console.log(`📊 Type: ${randomType.toUpperCase()}`);
         console.log(`💡 ${generatedStrategy.description}`);
         // Reload to see the new strategy
@@ -217,6 +263,9 @@ export default function Dashboard() {
   const changeTimeframe = async (timeframe: string) => {
     if (timeframe === selectedTimeframe) return; // Éviter les changements inutiles
     
+    // Activer le loading
+    setIsChangingTimeframe(true);
+    
     // Mise à jour instantanée de l'UI
     setSelectedTimeframe(timeframe);
     
@@ -232,9 +281,13 @@ export default function Dashboard() {
     if (isConnected) {
       try {
         await fetch(`/api/trading?action=changeTimeframe&timeframe=${timeframe}`);
+        // Le loading sera désactivé quand les nouvelles données arriveront via SSE
       } catch (error) {
         console.error('Error changing timeframe:', error);
+        setIsChangingTimeframe(false);
       }
+    } else {
+      setIsChangingTimeframe(false);
     }
   };
 
@@ -271,6 +324,33 @@ export default function Dashboard() {
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString('fr-FR');
   };
+
+  // Filter strategies by selected timeframe AND filter their trades to match timeframe
+  const filteredStrategyPerformances = strategyPerformances
+    .filter(p => p.timeframe === selectedTimeframe)
+    .map(perf => {
+      // Filter completedTrades to only include trades from this specific timeframe
+      const filteredTrades = perf.completedTrades?.filter(trade => trade.timeframe === perf.timeframe) || [];
+      
+      // Recalculate all stats based on filtered trades only
+      const totalTrades = filteredTrades.length;
+      const winningTrades = filteredTrades.filter(t => t.isWin).length;
+      const totalPnL = filteredTrades.reduce((sum, t) => sum + t.pnl, 0);
+      const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+      
+      // Calculate current capital based on filtered trades
+      const currentCapital = 100000 + totalPnL;
+      
+      return {
+        ...perf,
+        completedTrades: filteredTrades,
+        totalTrades,
+        winningTrades,
+        totalPnL,
+        winRate,
+        currentCapital
+      };
+    });
 
   const getSignalColor = (type: 'BUY' | 'SELL' | 'HOLD' | 'CLOSE_LONG' | 'CLOSE_SHORT') => {
     switch (type) {
@@ -318,12 +398,9 @@ export default function Dashboard() {
     const position = strategyMetrics.currentPosition;
     if (!position) return null;
 
-    // Calculer le cooldown restant
-    const now = Date.now();
-    const lastTradeTime = strategyMetrics.lastSignal?.timestamp || 0;
-    const cooldownPeriod = 5 * 60 * 1000; // 5 minutes
-    const cooldownRemaining = Math.max(0, cooldownPeriod - (now - lastTradeTime));
-    const cooldownPassed = cooldownRemaining === 0;
+    // Cooldown is now managed internally by strategies
+    const cooldownRemaining = 0; // Always 0 (cooldown handled by strategy)
+    const cooldownPassed = true;
     
     // Fonction pour déterminer si un critère est "proche"
     const getStatus = (value: boolean, isClose: boolean) => {
@@ -1644,15 +1721,25 @@ export default function Dashboard() {
     if (!state) return null;
 
     if (selectedStrategy === 'GLOBAL') {
-      // Global metrics: sum of all strategies
-      const totalPnL = strategyPerformances.reduce((sum, p) => sum + p.totalPnL, 0);
-      const totalTrades = strategyPerformances.reduce((sum, p) => sum + p.totalTrades, 0);
-      const totalWinningTrades = strategyPerformances.reduce((sum, p) => sum + p.winningTrades, 0);
+      // Global metrics: sum of all strategies (filtered by current timeframe)
+      const totalPnL = filteredStrategyPerformances.reduce((sum, p) => sum + p.totalPnL, 0);
+      const totalTrades = filteredStrategyPerformances.reduce((sum, p) => sum + p.totalTrades, 0);
+      const totalWinningTrades = filteredStrategyPerformances.reduce((sum, p) => sum + p.winningTrades, 0);
       const winRate = totalTrades > 0 ? (totalWinningTrades / totalTrades) * 100 : 0;
 
-      // For global view, show primary strategy position
+      // For global view, find active position from filtered strategies
+      const activeStrategy = filteredStrategyPerformances.find(p => p.currentPosition && p.currentPosition.type !== 'NONE');
+      const position = activeStrategy?.currentPosition || {
+        type: 'NONE' as const,
+        entryPrice: 0,
+        entryTime: 0,
+        quantity: 0,
+        unrealizedPnL: 0,
+        unrealizedPnLPercent: 0
+      };
+
       return {
-        position: state.currentPosition,
+        position,
         totalPnL,
         totalTrades,
         winningTrades: totalWinningTrades,
@@ -1660,7 +1747,7 @@ export default function Dashboard() {
       };
     } else {
       // Individual strategy metrics
-      const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+      const strategy = filteredStrategyPerformances.find(p => p.strategyName === selectedStrategy);
       if (!strategy) return null;
 
       return {
@@ -1682,7 +1769,7 @@ export default function Dashboard() {
   const getBackgroundStyle = () => {
     if (selectedStrategy === 'GLOBAL') return {};
     
-    const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+    const selectedStrategyData = filteredStrategyPerformances.find(p => p.strategyName === selectedStrategy);
     if (!selectedStrategyData) return {};
     
     // Dynamic background for CUSTOM based on color mapping
@@ -1720,6 +1807,39 @@ export default function Dashboard() {
     }
   };
 
+  // Helper function for Active Positions display
+  const formatDuration = (ms: number) => {
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    if (minutes >= 60) {
+      const hours = Math.floor(minutes / 60);
+      const remainingMinutes = minutes % 60;
+      return `${hours}h ${remainingMinutes}m`;
+    }
+    return `${minutes}m ${seconds}s`;
+  };
+
+  // Get active positions (filtered by timeframe, sorted by most recent first)
+  const activePositions = (selectedStrategy === 'GLOBAL' 
+    ? filteredStrategyPerformances
+        .filter(perf => perf.currentPosition && perf.currentPosition.type !== 'NONE')
+        .map(perf => ({ 
+          ...perf.currentPosition, 
+          strategyName: perf.strategyName,
+          strategyType: perf.strategyType
+        }))
+    : filteredStrategyPerformances
+        .filter(perf => perf.strategyName === selectedStrategy && perf.currentPosition && perf.currentPosition.type !== 'NONE')
+        .map(perf => ({ 
+          ...perf.currentPosition, 
+          strategyName: perf.strategyName,
+          strategyType: perf.strategyType
+        }))
+  ).sort((a, b) => b.entryTime - a.entryTime); // Sort by most recent first
+  
+  // Display only first position or all based on state
+  const displayedPositions = showAllPositions ? activePositions : activePositions.slice(0, 1);
+
   return (
     <div className="min-h-screen bg-gray-900 text-white transition-all duration-500" style={getBackgroundStyle()}>
       {/* Header Binance-style */}
@@ -1727,12 +1847,12 @@ export default function Dashboard() {
         <div className="grid grid-cols-3 items-center gap-4">
           {/* Left: Brand + Pair */}
           <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold text-yellow-400">TradingBot</h1>
+            <h1 className="text-xl font-bold bg-gradient-to-r from-sky-400 to-cyan-400 bg-clip-text text-transparent">Fluxion</h1>
             <div className="flex items-center gap-2">
               <span className="text-white font-semibold">BTC/USDT</span>
               <span className="text-gray-400 text-sm">Spot</span>
               {state && (
-                <span className="bg-yellow-400 text-black px-2 py-1 rounded text-xs font-medium">
+                <span className="bg-gradient-to-r from-sky-500 to-cyan-500 text-white px-2 py-1 rounded text-xs font-medium shadow-lg shadow-sky-500/30">
                   {state.timeframe}
                 </span>
               )}
@@ -1744,13 +1864,18 @@ export default function Dashboard() {
             {strategyPerformances.length > 0 && (
               <>
                 {selectedStrategy === 'GLOBAL' ? (
-                  <div className="px-4 py-1.5 bg-gray-900 border-2 border-yellow-500/50 rounded">
-                    <span className="text-base font-semibold text-yellow-400">
-                      🌍 Global Dashboard
+                  <div className="px-4 py-1.5 bg-gray-900 border-2 border-sky-500/50 rounded shadow-lg shadow-sky-500/20">
+                    <span className="text-base font-semibold bg-gradient-to-r from-sky-400 to-cyan-400 bg-clip-text text-transparent">
+                      🌍 {selectedTimeframe} Dashboard
                     </span>
                     <span className="ml-2 text-xs text-gray-400">
-                      {strategyPerformances.length} stratégies
+                      {filteredStrategyPerformances.length} stratégie{filteredStrategyPerformances.length > 1 ? 's' : ''}
                     </span>
+                    {strategyPerformances.length > filteredStrategyPerformances.length && (
+                      <span className="ml-2 text-xs text-cyan-400">
+                        (+{strategyPerformances.length - filteredStrategyPerformances.length} autre{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''} TF)
+                      </span>
+                    )}
                   </div>
                 ) : (() => {
                   const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
@@ -1796,7 +1921,7 @@ export default function Dashboard() {
           {/* Right: Monitoring Status */}
           <div className="flex items-center justify-end gap-4">
             {isConnecting && (
-              <div className="bg-yellow-600 text-white px-4 py-2 rounded text-sm font-medium">
+              <div className="bg-gradient-to-r from-sky-500 to-cyan-500 text-white px-4 py-2 rounded text-sm font-medium shadow-lg shadow-sky-500/30">
                 ⏳ Connecting...
               </div>
             )}
@@ -1815,20 +1940,49 @@ export default function Dashboard() {
 
        {/* Time Period Selector */}
        <div className="bg-gray-800 border-b border-gray-700 px-4 py-2">
-         <div className="flex items-center gap-1">
-           {['1m', '5m', '15m', '1h', '4h', '1d'].map((timeframe) => (
-             <button
-               key={timeframe}
-               onClick={() => changeTimeframe(timeframe)}
-               className={`px-3 py-1 text-sm rounded font-medium transition-colors ${
-                 selectedTimeframe === timeframe
-                   ? 'bg-yellow-400 text-black'
-                   : 'text-gray-400 hover:text-white hover:bg-gray-700'
-               }`}
-             >
-               {timeframe}
-             </button>
-           ))}
+         <div className="flex items-center gap-3">
+           <div className="flex items-center gap-1">
+             {['1m', '5m', '15m', '1h', '4h', '1d'].map((timeframe) => (
+               <button
+                 key={timeframe}
+                 onClick={() => changeTimeframe(timeframe)}
+                 disabled={isChangingTimeframe}
+                 className={`px-3 py-1 text-sm rounded font-medium transition-all ${
+                   selectedTimeframe === timeframe
+                     ? 'bg-gradient-to-r from-sky-500 to-cyan-500 text-white shadow-lg shadow-sky-500/30'
+                     : 'text-gray-400 hover:text-sky-400 hover:bg-gray-700'
+                 } ${isChangingTimeframe ? 'opacity-50 cursor-not-allowed' : ''}`}
+               >
+                 {timeframe}
+               </button>
+             ))}
+           </div>
+           
+           {/* Separator */}
+           {!isChangingTimeframe && filteredStrategyPerformances.length > 0 && (
+             <div className="h-6 w-px bg-gray-600"></div>
+           )}
+           
+           {isChangingTimeframe && (
+             <div className="flex items-center gap-2 text-sky-400 text-sm animate-pulse">
+               <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+               </svg>
+               <span>Loading {selectedTimeframe} data...</span>
+             </div>
+           )}
+           {!isChangingTimeframe && filteredStrategyPerformances.length > 0 && (
+             <div className="flex items-center gap-2 text-gray-400 text-xs">
+               <span className="font-medium">{filteredStrategyPerformances.length}</span>
+               <span>stratégie{filteredStrategyPerformances.length > 1 ? 's' : ''} sur {selectedTimeframe}</span>
+               {strategyPerformances.length > filteredStrategyPerformances.length && (
+                 <span className="text-cyan-400">
+                   ({strategyPerformances.length - filteredStrategyPerformances.length} autre{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''} timeframe{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''})
+                 </span>
+               )}
+             </div>
+           )}
          </div>
        </div>
 
@@ -1967,81 +2121,303 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Trading Info Panel */}
-          <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+          {/* Sentinel element for sticky detection */}
+          <div ref={statsSentinelRef} className="h-0 -mb-0"></div>
 
+          {/* Trading Info Panel - Dual Layout (Normal + Sticky) */}
+          <div className={`bg-gray-800 border-b border-gray-700 px-4 py-3 sticky top-[57px] z-20 transition-all ${
+            isStatsSticky ? 'backdrop-blur-sm shadow-md' : ''
+          }`}>
             {(() => {
               const metrics = getSelectedMetrics();
               if (!metrics) return <TradingInfoSkeleton />;
 
               return (
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-                  {/* Position Info */}
-                  <div className="flex flex-col" title="Position actuelle: LONG (achat), SHORT (vente à découvert), ou NONE (aucune position)">
-                    <span className="text-gray-400 text-xs mb-1">POSITION</span>
-                    <span className={`font-bold ${
-                      metrics.position.type === 'LONG' ? 'text-green-400' : 
-                      metrics.position.type === 'SHORT' ? 'text-red-400' : 
-                      'text-gray-400'
-                    }`}>
-                      {metrics.position.type}
-                    </span>
-                    {metrics.position.type !== 'NONE' && (
-                      <span className="text-xs text-gray-500" title={`Prix d'entrée de la position: ${metrics.position.entryPrice.toFixed(2)} USDT`}>
-                        Entry: ${metrics.position.entryPrice.toFixed(2)}
+                <>
+                  {/* Normal View - Grid Layout */}
+                  <div className={`grid-cols-2 lg:grid-cols-4 gap-6 ${isStatsSticky ? 'hidden' : 'grid'}`}>
+                    {/* Position Info */}
+                    <div className="flex flex-col" title="Position actuelle: LONG (achat), SHORT (vente à découvert), ou NONE (aucune position)">
+                      <span className="text-gray-400 text-xs mb-1">POSITION</span>
+                      <span className={`font-bold ${
+                        metrics.position.type === 'LONG' ? 'text-green-400' : 
+                        metrics.position.type === 'SHORT' ? 'text-red-400' : 
+                        'text-gray-400'
+                      }`}>
+                        {metrics.position.type}
                       </span>
-                    )}
+                      {metrics.position.type !== 'NONE' && (
+                        <span className="text-xs text-gray-500" title={`Prix d'entrée de la position: ${metrics.position.entryPrice.toFixed(2)} USDT`}>
+                          Entry: ${metrics.position.entryPrice.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Unrealized PnL */}
+                    <div className="flex flex-col" title="Profit/Perte non réalisé(e) de la position actuelle (avant clôture)">
+                      <span className="text-gray-400 text-xs mb-1">UNREALIZED P&L</span>
+                      <span className={`font-bold ${
+                        metrics.position.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {metrics.position.unrealizedPnL.toFixed(2)} USDT
+                      </span>
+                      <span className={`text-xs ${
+                        metrics.position.unrealizedPnLPercent >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`} title="Pourcentage de profit/perte par rapport au prix d'entrée">
+                        {metrics.position.unrealizedPnLPercent.toFixed(2)}%
+                      </span>
+                    </div>
+
+                    {/* Total PnL */}
+                    <div className="flex flex-col" title="Profit/Perte total(e) cumulé(e) de toutes les positions fermées">
+                      <span className="text-gray-400 text-xs mb-1">TOTAL P&L</span>
+                      <span className={`font-bold ${
+                        metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {metrics.totalPnL.toFixed(2)} USDT
+                      </span>
+                      <span className="text-xs text-gray-500" title={`Nombre total de trades exécutés: ${metrics.totalTrades}`}>
+                        {metrics.totalTrades} trades
+                      </span>
+                    </div>
+
+                    {/* Win Rate */}
+                    <div className="flex flex-col" title="Pourcentage de trades gagnants sur le total des trades">
+                      <span className="text-gray-400 text-xs mb-1">WIN RATE</span>
+                      <span className="font-bold text-blue-400">
+                        {metrics.winRate.toFixed(1)}%
+                      </span>
+                      <span className="text-xs text-gray-500" title={`${metrics.winningTrades} trades gagnants sur ${metrics.totalTrades} trades au total`}>
+                        {metrics.winningTrades}/{metrics.totalTrades} wins
+                      </span>
+                    </div>
                   </div>
 
-                  {/* PnL */}
-                  <div className="flex flex-col" title="Profit/Perte non réalisé(e) de la position actuelle (avant clôture)">
-                    <span className="text-gray-400 text-xs mb-1">UNREALIZED P&L</span>
-                    <span className={`font-bold ${
-                      metrics.position.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                    }`}>
-                      {metrics.position.unrealizedPnL.toFixed(2)} USDT
-                    </span>
-                    <span className={`text-xs ${
-                      metrics.position.unrealizedPnLPercent >= 0 ? 'text-green-400' : 'text-red-400'
-                    }`} title="Pourcentage de profit/perte par rapport au prix d'entrée">
-                      {metrics.position.unrealizedPnLPercent.toFixed(2)}%
-                    </span>
-                  </div>
+                  {/* Sticky View - Compact Horizontal Layout */}
+                  <div className={`items-center gap-6 ${isStatsSticky ? 'flex' : 'hidden'}`}>
+                    {/* Position */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400 text-xs font-medium">POS:</span>
+                      <span className={`font-bold text-sm ${
+                        metrics.position.type === 'LONG' ? 'text-green-400' : 
+                        metrics.position.type === 'SHORT' ? 'text-red-400' : 
+                        'text-gray-400'
+                      }`}>
+                        {metrics.position.type}
+                      </span>
+                      {metrics.position.type !== 'NONE' && (
+                        <span className="text-xs text-gray-400 font-mono">
+                          ${metrics.position.entryPrice.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
 
-                  {/* Total PnL */}
-                  <div className="flex flex-col" title="Profit/Perte total(e) cumulé(e) de toutes les positions fermées">
-                    <span className="text-gray-400 text-xs mb-1">TOTAL P&L</span>
-                    <span className={`font-bold ${
-                      metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                    }`}>
-                      {metrics.totalPnL.toFixed(2)} USDT
-                    </span>
-                    <span className="text-xs text-gray-500" title={`Nombre total de trades exécutés: ${metrics.totalTrades}`}>
-                      {metrics.totalTrades} trades
-                    </span>
-                  </div>
+                    <div className="w-px h-5 bg-gray-600"></div>
 
-                  {/* Win Rate */}
-                  <div className="flex flex-col" title="Pourcentage de trades gagnants sur le total des trades">
-                    <span className="text-gray-400 text-xs mb-1">WIN RATE</span>
-                    <span className="font-bold text-blue-400">
-                      {metrics.winRate.toFixed(1)}%
-                    </span>
-                    <span className="text-xs text-gray-500" title={`${metrics.winningTrades} trades gagnants sur ${metrics.totalTrades} trades au total`}>
-                      {metrics.winningTrades}/{metrics.totalTrades} wins
-                    </span>
+                    {/* Unrealized P&L */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400 text-xs font-medium">UNREAL:</span>
+                      <span className={`font-bold text-sm ${
+                        metrics.position.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {metrics.position.unrealizedPnL >= 0 ? '+' : ''}{metrics.position.unrealizedPnL.toFixed(2)} USDT
+                      </span>
+                      <span className={`text-xs ${
+                        metrics.position.unrealizedPnLPercent >= 0 ? 'text-green-400/70' : 'text-red-400/70'
+                      }`}>
+                        ({metrics.position.unrealizedPnLPercent >= 0 ? '+' : ''}{metrics.position.unrealizedPnLPercent.toFixed(2)}%)
+                      </span>
+                    </div>
+
+                    <div className="w-px h-5 bg-gray-600"></div>
+
+                    {/* Total P&L */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400 text-xs font-medium">TOTAL:</span>
+                      <span className={`font-bold text-sm ${
+                        metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {metrics.totalPnL >= 0 ? '+' : ''}{metrics.totalPnL.toFixed(2)} USDT
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        ({metrics.totalTrades})
+                      </span>
+                    </div>
+
+                    <div className="w-px h-5 bg-gray-600"></div>
+
+                    {/* Win Rate */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400 text-xs font-medium">WIN:</span>
+                      <span className="font-bold text-sm text-blue-400">
+                        {metrics.winRate.toFixed(1)}%
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        ({metrics.winningTrades}/{metrics.totalTrades})
+                      </span>
+                    </div>
                   </div>
-                </div>
+                </>
               );
             })()}
           </div>
+
+          {/* Active Positions - Below stats bar - Sticky */}
+          {activePositions.length > 0 && (() => {
+            // Get color for the first active position
+            const firstPosition = activePositions[0];
+            const strategyPerf = filteredStrategyPerformances.find(p => p.strategyName === firstPosition.strategyName);
+            const customColor = strategyPerf?.customConfig?.color;
+            
+            // Map custom colors to very subtle background gradients
+            const getBgClass = (color?: string) => {
+              if (!color) return 'bg-gray-800/95';
+              
+              const colorMap: Record<string, string> = {
+                emerald: 'bg-gradient-to-r from-emerald-950/20 via-gray-800/95 to-gray-800/95',
+                rose: 'bg-gradient-to-r from-rose-950/20 via-gray-800/95 to-gray-800/95',
+                indigo: 'bg-gradient-to-r from-indigo-950/20 via-gray-800/95 to-gray-800/95',
+                violet: 'bg-gradient-to-r from-violet-950/20 via-gray-800/95 to-gray-800/95',
+                amber: 'bg-gradient-to-r from-amber-950/20 via-gray-800/95 to-gray-800/95',
+                lime: 'bg-gradient-to-r from-lime-950/20 via-gray-800/95 to-gray-800/95',
+                sky: 'bg-gradient-to-r from-sky-950/20 via-gray-800/95 to-gray-800/95',
+                fuchsia: 'bg-gradient-to-r from-fuchsia-950/20 via-gray-800/95 to-gray-800/95',
+                pink: 'bg-gradient-to-r from-pink-950/20 via-gray-800/95 to-gray-800/95',
+                red: 'bg-gradient-to-r from-red-950/20 via-gray-800/95 to-gray-800/95',
+                green: 'bg-gradient-to-r from-green-950/20 via-gray-800/95 to-gray-800/95',
+                slate: 'bg-gradient-to-r from-slate-950/20 via-gray-800/95 to-gray-800/95',
+                stone: 'bg-gradient-to-r from-stone-950/20 via-gray-800/95 to-gray-800/95',
+              };
+              
+              return colorMap[color] || 'bg-gray-800/95';
+            };
+            
+            return (
+              <div className={`${getBgClass(customColor)} border-b border-gray-600/50 px-6 py-3 sticky z-20 backdrop-blur-md shadow-lg transition-all ${
+                isStatsSticky ? 'top-[105px]' : 'top-[130px]'
+              }`}>
+                {displayedPositions.map((currentPosition, idx) => {
+                  const strategyPerf = filteredStrategyPerformances.find(p => p.strategyName === currentPosition.strategyName);
+                  const customColor = strategyPerf?.customConfig?.color;
+                  const colors = currentPosition.strategyType ? getStrategyColor(currentPosition.strategyType, customColor) : { text: 'text-gray-400' };
+                  
+                  return (
+                  <div key={idx} className={`flex items-center gap-4 ${idx > 0 ? 'pt-3 border-t border-gray-700/50 mt-3' : ''}`}>
+                    {/* Status & Strategy */}
+                    <div className="flex items-center gap-2">
+                      <div className="w-2.5 h-2.5 bg-green-400 rounded-full animate-pulse"></div>
+                      <h3 className="text-sm font-bold text-white">POSITION ACTIVE</h3>
+                      <span className={`text-xs font-semibold ${colors.text}`}>- {currentPosition.strategyName}</span>
+                    </div>
+
+                    {/* Type Badge */}
+                    <div className={`px-2 py-0.5 rounded text-xs font-bold ${
+                      currentPosition.type === 'LONG' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+                    }`}>
+                      {currentPosition.type}
+                    </div>
+
+                    {/* Entry Price */}
+                    <div className="text-white font-mono text-sm font-bold">
+                      ${formatPrice(currentPosition.entryPrice)}
+                    </div>
+
+                    {/* Duration with blue clock icon */}
+                    <div className="flex items-center gap-1">
+                      <HiClock className="w-3.5 h-3.5 text-blue-400" />
+                      <span className="text-white font-mono text-xs">
+                        {formatDuration(Date.now() - currentPosition.entryTime)}
+                      </span>
+                    </div>
+
+                    {/* Separator */}
+                    <div className="w-px h-4 bg-gray-600"></div>
+
+                    {strategyPerf?.config && (
+                      <>
+                        {/* TP */}
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-gray-400 font-semibold">TP</span>
+                          <span className="text-green-400 font-mono text-sm font-bold">
+                            ${formatPrice(currentPosition.entryPrice * (1 + (strategyPerf.config.profitTargetPercent || 0) / 100))}
+                          </span>
+                          <span className="text-green-400/70 text-[10px]">
+                            (+{strategyPerf.config.profitTargetPercent || 0}%)
+                          </span>
+                        </div>
+
+                        {/* SL */}
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-gray-400 font-semibold">SL</span>
+                          <span className="text-red-400 font-mono text-sm font-bold">
+                            ${formatPrice(currentPosition.entryPrice * (1 - (strategyPerf.config.stopLossPercent || 0) / 100))}
+                          </span>
+                          <span className="text-red-400/70 text-[10px]">
+                            (-{strategyPerf.config.stopLossPercent || 0}%)
+                          </span>
+                        </div>
+
+                        {/* Time Left with red clock icon */}
+                        <div className="flex items-center gap-1">
+                          <HiClock className="w-3.5 h-3.5 text-red-400" />
+                          <span className="text-orange-400 font-mono text-xs font-bold">
+                            {strategyPerf?.config && strategyPerf.config.maxPositionTime ? 
+                              formatDuration(Math.max(0, (strategyPerf.config.maxPositionTime * 60000) - (Date.now() - currentPosition.entryTime))) :
+                              '∞'
+                            }
+                          </span>
+                        </div>
+                      </>
+                    )}
+
+                    {/* P&L - At the end */}
+                    <div className="flex items-center gap-1.5 ml-auto">
+                      <span className="text-[10px] text-gray-400 font-semibold">P&L</span>
+                      <span className={`font-bold text-sm ${
+                        currentPosition.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {currentPosition.unrealizedPnL >= 0 ? '+' : ''}{formatPrice(currentPosition.unrealizedPnL)} USDT
+                        <span className={`text-xs ml-1 ${
+                          currentPosition.unrealizedPnLPercent >= 0 ? 'text-green-400/70' : 'text-red-400/70'
+                        }`}>
+                          ({currentPosition.unrealizedPnLPercent >= 0 ? '+' : ''}{currentPosition.unrealizedPnLPercent.toFixed(2)}%)
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              
+              {/* Expand/Collapse Button - Show if more than 1 position */}
+              {activePositions.length > 1 && (
+                <div className="mt-2 pt-2 border-t border-gray-600/30 flex items-center justify-center">
+                  <button
+                    onClick={() => setShowAllPositions(!showAllPositions)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] text-gray-400 hover:text-white transition-colors rounded hover:bg-gray-700/30"
+                  >
+                    <span>
+                      {showAllPositions 
+                        ? `Masquer ${activePositions.length - 1}` 
+                        : `+${activePositions.length - 1}`
+                      }
+                    </span>
+                    <HiChevronDown className={`w-2.5 h-2.5 transition-transform ${showAllPositions ? 'rotate-180' : ''}`} />
+                  </button>
+                </div>
+              )}
+              </div>
+            );
+          })()}
 
           {/* Trading Criteria & Multi-Strategy Performance Panel */}
           {strategyPerformances.length === 0 ? (
             <StrategyPanelSkeleton />
           ) : (
             <StrategyPanel 
-              performances={strategyPerformances} 
+              performances={filteredStrategyPerformances}
+              allPerformances={strategyPerformances}
+              currentTimeframe={selectedTimeframe}
+              isStatsSticky={isStatsSticky}
               onToggleStrategy={handleToggleStrategy}
               selectedStrategy={selectedStrategy}
               onSelectStrategy={setSelectedStrategy}
@@ -2059,60 +2435,172 @@ export default function Dashboard() {
               isGeneratingAI={isGeneratingAI}
               onCreateStrategy={() => setShowStrategyBuilder(true)}
               indicatorData={state ? {
+                // Price-based
                 price: state.currentPrice,
-                rsi: state.rsi,
+                open: (state as any).open,
+                high: (state as any).high,
+                low: (state as any).low,
+                volume: state.candles && state.candles.length > 0 ? state.candles[state.candles.length - 1].volume : undefined,
+                
+                // Moving Averages
                 ema12: state.ema12,
                 ema26: state.ema26,
                 ema50: state.ema50,
+                ema100: (state as any).ema100,
                 ema200: state.ema200,
-                ma7: state.ma7,
-                ma25: state.ma25,
-                ma99: state.ma99,
-                volume: state.candles && state.candles.length > 0 ? state.candles[state.candles.length - 1].volume : undefined
-              } : null}
+                sma7: (state as any).sma7 ?? state.ma7,
+                sma25: (state as any).sma25 ?? state.ma25,
+                sma50: (state as any).sma50,
+                sma99: (state as any).sma99 ?? state.ma99,
+                sma200: (state as any).sma200,
+                
+                // Momentum Indicators
+                rsi: state.rsi,
+                rsi9: (state as any).rsi9,
+                rsi21: (state as any).rsi21,
+                
+                // MACD
+                macd: (state as any).macd,
+                macdSignal: (state as any).macdSignal,
+                macdHistogram: (state as any).macdHistogram,
+                
+                // Bollinger Bands
+                bbUpper: (state as any).bbUpper,
+                bbMiddle: (state as any).bbMiddle,
+                bbLower: (state as any).bbLower,
+                bbWidth: (state as any).bbWidth,
+                bbPercent: (state as any).bbPercent,
+                
+                // Volatility
+                atr: (state as any).atr,
+                atr14: (state as any).atr14,
+                atr21: (state as any).atr21,
+                
+                // Stochastic
+                stochK: (state as any).stochK,
+                stochD: (state as any).stochD,
+                
+                // Trend Strength
+                adx: (state as any).adx,
+                
+                // Others
+                cci: (state as any).cci,
+                obv: (state as any).obv,
+                
+                // Volume Analysis
+                volumeSMA20: (state as any).volumeSMA20,
+                volumeRatio: (state as any).volumeRatio,
+                
+                // Price Position
+                priceChangePercent: (state as any).priceChangePercent,
+                priceChange24h: (state as any).priceChange24h,
+                vwap: (state as any).vwap,
+                
+                // Trend Detection
+                isBullishTrend: (state as any).isBullishTrend,
+                isBearishTrend: (state as any).isBearishTrend,
+                isUptrend: (state as any).isUptrend,
+                isDowntrend: (state as any).isDowntrend,
+                isUptrendConfirmed3: (state as any).isUptrendConfirmed3,
+                isDowntrendConfirmed3: (state as any).isDowntrendConfirmed3,
+                isTrendReversalUp: (state as any).isTrendReversalUp,
+                isTrendReversalDown: (state as any).isTrendReversalDown,
+                
+                // Momentum
+                isOversold: (state as any).isOversold,
+                isOverbought: (state as any).isOverbought,
+                
+                // MACD Signals
+                isMACDBullish: (state as any).isMACDBullish,
+                isMACDBearish: (state as any).isMACDBearish,
+                isMACDCrossoverBullish: (state as any).isMACDCrossoverBullish,
+                isMACDCrossoverBearish: (state as any).isMACDCrossoverBearish,
+                
+                // EMA Crossovers
+                isEMAFastSlowBullCross: (state as any).isEMAFastSlowBullCross,
+                isEMAFastSlowBearCross: (state as any).isEMAFastSlowBearCross,
+                
+                // Price/EMA Cross
+                isPriceCrossedAboveEMA50: (state as any).isPriceCrossedAboveEMA50,
+                isPriceCrossedBelowEMA50: (state as any).isPriceCrossedBelowEMA50,
+                
+                // Volume
+                isHighVolume: (state as any).isHighVolume,
+                isLowVolume: (state as any).isLowVolume,
+                
+                // VWAP Signals
+                isPriceAboveVWAP: (state as any).isPriceAboveVWAP,
+                isPriceBelowVWAP: (state as any).isPriceBelowVWAP,
+                isNearVWAP: (state as any).isNearVWAP,
+                
+                // Bollinger Bands Signals
+                isNearBBLower: (state as any).isNearBBLower,
+                isNearBBUpper: (state as any).isNearBBUpper,
+                isBelowBBLower: (state as any).isBelowBBLower,
+                isAboveBBUpper: (state as any).isAboveBBUpper,
+                
+                // Candle Patterns
+                isBullishCandle: (state as any).isBullishCandle,
+                isBearishCandle: (state as any).isBearishCandle,
+                isBullishEngulfing: (state as any).isBullishEngulfing,
+                isBearishEngulfing: (state as any).isBearishEngulfing,
+                isDoji: (state as any).isDoji,
+                isHammer: (state as any).isHammer,
+                isShootingStar: (state as any).isShootingStar
+              } as any : null}
               onDeleteStrategy={async (strategyName) => {
                 // Cette fonction sera appelée depuis StrategyPanel après confirmation
                 console.log(`Deleting strategy: ${strategyName}`);
+              }}
+              onShowTimeframeComparison={async (strategyName) => {
+                setComparisonStrategyName(strategyName);
+                // Fetch all performances from all timeframes
+                try {
+                  const response = await fetch('/api/all-performances');
+                  const data = await response.json();
+                  if (data.success) {
+                    setAllTimeframePerformances(data.performances);
+                    setShowTimeframeComparison(true);
+                  } else {
+                    console.error('Failed to fetch all performances:', data.error);
+                  }
+                } catch (error) {
+                  console.error('Error fetching all performances:', error);
+                }
               }}
             />
           )}
 
           {/* Binance-style Chart */}
-          <BinanceChart state={state} selectedStrategy={selectedStrategy} strategyPerformances={strategyPerformances} localConfigCache={localConfigCache} />
+          <BinanceChart state={state} selectedStrategy={selectedStrategy} strategyPerformances={filteredStrategyPerformances} localConfigCache={localConfigCache} />
 
           {/* Professional Trading History */}
           <TradingHistory 
-            strategyPerformances={strategyPerformances.map(perf => {
+            strategyPerformances={filteredStrategyPerformances.map(perf => {
               // Merge with localConfigCache if available
               const cachedConfig = localConfigCache[perf.strategyName];
-              if (cachedConfig) {
-                return {
-                  ...perf,
-                  config: {
-                    ...perf.config,
-                    ...cachedConfig
-                  }
-                };
-              }
-              return perf;
+              return cachedConfig ? {
+                ...perf,
+                config: {
+                  ...perf.config,
+                  ...cachedConfig
+                }
+              } : perf;
             })} 
             selectedStrategy={selectedStrategy}
             currentStrategy={selectedStrategy !== 'GLOBAL' ? (() => {
-              const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+              const strategy = filteredStrategyPerformances.find(p => p.strategyName === selectedStrategy);
               if (!strategy) return undefined;
               
               // Merge with localConfigCache if available
               const cachedConfig = localConfigCache[selectedStrategy];
-              if (cachedConfig) {
-                return {
-                  ...strategy,
-                  config: {
-                    ...strategy.config,
-                    ...cachedConfig
-                  }
-                };
-              }
-              return strategy;
+              return cachedConfig ? {
+                ...strategy,
+                config: {
+                  ...strategy.config,
+                  ...cachedConfig
+                }
+              } : strategy;
             })() : undefined}
             getStrategyColor={getStrategyColor}
           />
@@ -2132,6 +2620,19 @@ export default function Dashboard() {
         <StrategyBuilder
           onSave={handleSaveStrategy}
           onClose={() => setShowStrategyBuilder(false)}
+        />
+      )}
+
+      {/* Timeframe Comparison Modal */}
+      {showTimeframeComparison && comparisonStrategyName && (
+        <TimeframeComparison
+          strategyName={comparisonStrategyName}
+          performances={allTimeframePerformances}
+          onClose={() => {
+            setShowTimeframeComparison(false);
+            setComparisonStrategyName(null);
+            setAllTimeframePerformances([]);
+          }}
         />
       )}
     </div>

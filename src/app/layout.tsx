@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "TradingBot BTC/USDT",
-  description: "Bot de trading automatique en temps réel avec stratégie RSI + EMA",
+  title: "Fluxion - AI Trading Platform",
+  description: "Multi-timeframe AI trading platform with advanced strategy automation",
 };
 
 export default function RootLayout({

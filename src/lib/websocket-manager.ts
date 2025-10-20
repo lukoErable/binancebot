@@ -1,7 +1,7 @@
 import { BinanceKlineData, Candle, StrategyPerformance, StrategyState } from '@/types/trading';
 import { EMA, RSI } from 'technicalindicators';
 import WebSocket from 'ws';
-import { TradingStrategy, defaultStrategyConfig } from './ema-rsi-strategy';
+// Removed hardcoded strategy import
 import { IndicatorEngine } from './indicator-engine';
 import { StrategyManager } from './strategy-manager';
 
@@ -15,7 +15,7 @@ export function getGlobalStrategyManager(): StrategyManager | null {
 export class BinanceWebSocketManager {
   private ws: WebSocket | null = null;
   private candles: Candle[] = [];
-  private strategy: TradingStrategy;
+  // Removed TradingStrategy field; we now rely solely on StrategyManager (CUSTOM only)
   private strategyManager: StrategyManager;
   private indicatorEngine: IndicatorEngine;
   private state: StrategyState;
@@ -27,11 +27,13 @@ export class BinanceWebSocketManager {
   private timeframe: string = '1m';
   private tradingMode: boolean = false;
   private isAnalyzing = false; // Flag pour éviter les analyses parallèles
+  private lastAnalysisTime = 0; // Timestamp de la dernière analyse
+  private minAnalysisInterval = 1000; // Minimum 1 seconde entre les analyses
 
   constructor(onStateUpdate?: (state: StrategyState) => void, timeframe: string = '1m', tradingMode: boolean = false) {
     this.timeframe = timeframe;
     this.tradingMode = tradingMode;
-    this.strategy = new TradingStrategy(defaultStrategyConfig);
+    // Removed: new TradingStrategy(defaultStrategyConfig)
     this.strategyManager = new StrategyManager();
     this.indicatorEngine = new IndicatorEngine();
     globalStrategyManager = this.strategyManager; // Expose globally
@@ -141,9 +143,9 @@ export class BinanceWebSocketManager {
         this.reconnectAttempts = 0;
         this.state.isConnected = true;
         
-        // Update P&L for any restored positions with current price
+        // Update P&L for any restored positions with current price (for current timeframe)
         if (this.state.currentPrice > 0) {
-          this.strategyManager.updateAllStrategiesWithCurrentPrice(this.state.currentPrice);
+          this.strategyManager.updateStrategiesWithCurrentPrice(this.state.currentPrice, this.timeframe);
         }
         
         this.updateState();
@@ -206,8 +208,8 @@ export class BinanceWebSocketManager {
             console.log(`📈 New candle closed: ${newCandle.close.toFixed(2)} USDT`);
           }
           
-          // Analyze market and check for signals
-          this.analyzeAndExecute().catch(error => {
+          // Analyze market and check for signals (force analysis on closed candle)
+          this.analyzeAndExecute(true).catch(error => {
             console.error('❌ Error in analyzeAndExecute:', error);
           });
         } else {
@@ -226,8 +228,8 @@ export class BinanceWebSocketManager {
             };
           }
           
-          // Update all strategies with current price for real-time P&L calculation
-          this.strategyManager.updateAllStrategiesWithCurrentPrice(parseFloat(kline.c));
+          // Update all strategies with current price for real-time P&L calculation (for current timeframe)
+          this.strategyManager.updateStrategiesWithCurrentPrice(parseFloat(kline.c), this.timeframe);
           
           // REAL-TIME ANALYSIS: Analyze market on EVERY price update (not just closed candles)
           // This is critical for scalping strategies like Neural Scalper
@@ -244,17 +246,24 @@ export class BinanceWebSocketManager {
   /**
    * Analyze market and execute trades if signal detected
    */
-  private async analyzeAndExecute(): Promise<void> {
+  private async analyzeAndExecute(forceAnalysis = false): Promise<void> {
     // Éviter les exécutions parallèles (évite les duplicates lors du rechargement)
     if (this.isAnalyzing) {
       console.log('⏭️  Analysis already in progress, skipping...');
       return;
     }
     
+    // Throttle: ne pas analyser plus d'une fois par seconde (sauf pour les bougies fermées)
+    const now = Date.now();
+    if (!forceAnalysis && (now - this.lastAnalysisTime) < this.minAnalysisInterval) {
+      return; // Skip silently
+    }
+    
     this.isAnalyzing = true;
+    this.lastAnalysisTime = now;
     try {
-      // Always analyze with strategy manager for multi-strategy support
-      await this.strategyManager.analyzeAllStrategies(this.candles);
+      // Analyze strategies for current timeframe
+      await this.strategyManager.analyzeStrategiesForTimeframe(this.candles, this.timeframe);
     } finally {
       this.isAnalyzing = false;
     }
@@ -266,34 +275,6 @@ export class BinanceWebSocketManager {
     const performances = this.strategyManager.getAllPerformances();
     const bestStrategyData = this.strategyManager.getBestStrategy();
     const bestStrategy = bestStrategyData ? bestStrategyData.performance : null;
-    
-    // Signal saving is now handled by StrategyManager with duplicate checking
-    
-    // Always calculate and update indicators from the first active strategy
-    const activeStrategy = performances.find(p => p.isActive);
-    if (activeStrategy && activeStrategy.lastSignal) {
-      const signal = activeStrategy.lastSignal;
-      
-      // Update state with new signal
-      if (signal.type !== 'HOLD') {
-        this.state.signals.push(signal);
-        // Keep only last 10 signals
-        if (this.state.signals.length > 10) {
-          this.state.signals.shift();
-        }
-        // Mettre à jour lastSignal seulement pour les signaux actionnables
-        this.state.lastSignal = signal;
-      }
-      
-      // Toujours mettre à jour les indicateurs basiques (legacy)
-      this.state.rsi = signal.rsi;
-      this.state.ema50 = signal.ema50;
-      this.state.ema200 = signal.ema200;
-      this.state.ma7 = signal.ma7;
-      this.state.ma25 = signal.ma25;
-      this.state.ma99 = signal.ma99;
-      this.state.currentPrice = signal.price;
-    }
     
     // Update state with ALL indicators from IndicatorEngine
     this.state.ema12 = indicators.ema12;
@@ -582,17 +563,19 @@ export class BinanceWebSocketManager {
   }
 
   /**
-   * Toggle a specific strategy
+   * Toggle a specific strategy (uses provided timeframe or current timeframe)
    */
-  toggleStrategy(strategyName: string): boolean {
-    return this.strategyManager.toggleStrategy(strategyName);
+  toggleStrategy(strategyName: string, timeframe?: string): boolean {
+    const tf = timeframe || this.timeframe; // Use provided timeframe or current
+    return this.strategyManager.toggleStrategy(strategyName, tf);
   }
 
   /**
-   * Reset a specific strategy
+   * Reset a specific strategy for a specific timeframe
    */
-  async resetStrategy(strategyName: string): Promise<boolean> {
-    return await this.strategyManager.resetStrategy(strategyName);
+  async resetStrategy(strategyName: string, timeframe?: string): Promise<boolean> {
+    const tf = timeframe || this.timeframe; // Use provided timeframe or current
+    return await this.strategyManager.resetStrategy(strategyName, tf);
   }
 
   /**

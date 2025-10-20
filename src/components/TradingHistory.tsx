@@ -6,7 +6,7 @@ interface TradingHistoryProps {
   strategyPerformances: StrategyPerformance[];
   selectedStrategy: string;
   currentStrategy?: StrategyPerformance;
-  getStrategyColor: (strategyType: string) => { border: string; text: string; accent: string; bgSelected: string };
+  getStrategyColor: (strategyType: string, customColor?: string) => { border: string; text: string; accent: string; bgSelected: string };
 }
 
 interface TradeStats {
@@ -23,7 +23,6 @@ interface TradeStats {
 }
 
 const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, selectedStrategy, currentStrategy, getStrategyColor }) => {
-  const [activeTab, setActiveTab] = useState<'statistics' | 'signals' | 'trades'>('statistics');
   const [flippedTrades, setFlippedTrades] = useState<Set<number>>(new Set());
 
   // Toggle trade flip
@@ -39,58 +38,7 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
     });
   };
 
-  // Get all active positions
-  const activePositions = useMemo(() => {
-    if (selectedStrategy === 'GLOBAL') {
-      // Get all active positions across all strategies
-      return strategyPerformances
-        .filter(perf => perf.currentPosition && perf.currentPosition.type !== 'NONE')
-        .map(perf => ({ 
-          ...perf.currentPosition, 
-          strategyName: perf.strategyName,
-          strategyType: perf.strategyType
-        }));
-    } else {
-      // Get only the selected strategy's position
-      const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
-      if (strategy?.currentPosition && strategy.currentPosition.type !== 'NONE') {
-        return [{ 
-          ...strategy.currentPosition, 
-          strategyName: strategy.strategyName,
-          strategyType: strategy.strategyType
-        }];
-      }
-      return [];
-    }
-  }, [strategyPerformances, selectedStrategy]);
-
-  // Get all signals
-  const allSignals = useMemo(() => {
-    let signals: any[] = [];
-    
-    if (selectedStrategy === 'GLOBAL') {
-      strategyPerformances.forEach(perf => {
-        if (perf.signalHistory) {
-          signals = [...signals, ...perf.signalHistory.map(s => ({ 
-            ...s, 
-            strategyName: perf.strategyName,
-            strategyType: perf.strategyType 
-          }))];
-        }
-      });
-    } else {
-      const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
-      if (strategy?.signalHistory) {
-        signals = strategy.signalHistory.map(s => ({ 
-          ...s, 
-          strategyName: strategy.strategyName,
-          strategyType: strategy.strategyType 
-        }));
-      }
-    }
-    
-    return signals.sort((a, b) => b.timestamp - a.timestamp); // Most recent first
-  }, [strategyPerformances, selectedStrategy]);
+  // Active positions now displayed in Dashboard
 
   // Get completed trades
   const completedTrades = useMemo(() => {
@@ -99,7 +47,11 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
     if (selectedStrategy === 'GLOBAL') {
       strategyPerformances.forEach(perf => {
         if (perf.completedTrades) {
-          trades = [...trades, ...perf.completedTrades.map(t => ({ ...t, strategyName: perf.strategyName }))];
+          trades = [...trades, ...perf.completedTrades.map(t => ({ 
+            ...t, 
+            strategyName: perf.strategyName,
+            customColor: perf.customConfig?.color
+          }))];
         }
       });
     } else {
@@ -178,243 +130,114 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
     }
   };
 
-  const getSignalColor = (type: string) => {
-    switch (type) {
-      case 'BUY': return 'bg-green-500/20 text-green-400 border-green-500/30';
-      case 'SELL': return 'bg-red-500/20 text-red-400 border-red-500/30';
-      case 'CLOSE_LONG': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      case 'CLOSE_SHORT': return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
-      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
-    }
-  };
-
   return (
     <div className="bg-gray-800 border-t border-gray-700">
-      {/* Trading History Tabs */}
+      {/* Trading History - Unified View */}
       <div className="border-t border-gray-700 mt-3">
-        {/* Tab Navigation */}
-        <div className="flex border-b border-gray-700">
-          <button
-            onClick={() => setActiveTab('statistics')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors cursor-pointer select-none ${
-              activeTab === 'statistics'
-                ? 'bg-gray-700 text-white border-b-2 border-gray-500'
-                : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
-            }`}
-          >
-            <HiChartBar className="w-4 h-4 pointer-events-none" />
-            <span className="pointer-events-none">Statistics</span>
-            <span className="text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded pointer-events-none">
-              {stats.totalTrades}
+        {/* Header */}
+        <div className="px-6 py-3 border-b border-gray-700">
+          <div className="flex items-center gap-2">
+            <HiChartBar className="w-5 h-5 text-gray-300" />
+            <h3 className="text-lg font-bold text-white">Trading Performance</h3>
+            <span className="text-xs bg-gray-600 text-gray-300 px-2 py-0.5 rounded">
+              {stats.totalTrades} trades
             </span>
-          </button>
-          
-          <button
-            onClick={() => setActiveTab('signals')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors cursor-pointer select-none ${
-              activeTab === 'signals'
-                ? 'bg-gray-700 text-white border-b-2 border-gray-500'
-                : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
-            }`}
-          >
-            <HiLightningBolt className="w-4 h-4 pointer-events-none" />
-            <span className="pointer-events-none">Signals</span>
-            <span className="text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded pointer-events-none">
-              {allSignals.length}
-            </span>
-          </button>
-          
-          <button
-            onClick={() => setActiveTab('trades')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors cursor-pointer select-none ${
-              activeTab === 'trades'
-                ? 'bg-gray-700 text-white border-b-2 border-gray-500'
-                : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
-            }`}
-          >
-            <HiTrendingUp className="w-4 h-4 pointer-events-none" />
-            <span className="pointer-events-none">Trades</span>
-            <span className="text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded pointer-events-none">
-              {completedTrades.length}
-            </span>
-          </button>
+          </div>
         </div>
 
-        {/* Active Positions - Below tabs, above content */}
-        {activePositions.length > 0 && (
-          <div className="bg-gray-800/80 border-b border-gray-600/50 px-6 py-4 space-y-3">
-            {activePositions.map((currentPosition, idx) => {
-              const strategyPerf = strategyPerformances.find(p => p.strategyName === currentPosition.strategyName);
-              const colors = currentPosition.strategyType ? getStrategyColor(currentPosition.strategyType) : { text: 'text-gray-400' };
-              
-              return (
-                <div key={idx} className={idx > 0 ? 'pt-3 border-t border-gray-700/50' : ''}>
-            <div className="flex items-center justify-between">
-              {/* Left Group - Status & Strategy */}
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
-                <h3 className="text-lg font-bold text-white">POSITION ACTIVE</h3>
-                <span className={`text-sm font-semibold ${colors.text}`}>- {currentPosition.strategyName}</span>
-              </div>
-
-              {/* Center Group - Position Details */}
-              <div className="flex items-center gap-6">
-                <div className="text-center">
-                  <div className="text-xs text-gray-400">Type</div>
-                  <div className={`px-2 py-0.5 rounded text-xs font-bold ${
-                    currentPosition.type === 'LONG' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-                  }`}>
-                    {currentPosition.type}
-                  </div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs text-gray-400">Entry Price</div>
-                  <div className="text-white font-mono font-bold">${formatPrice(currentPosition.entryPrice)}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs text-gray-400">Duration</div>
-                  <div className="text-white font-mono">
-                    {formatDuration(Date.now() - currentPosition.entryTime)}
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Group - P&L & Targets */}
-              <div className="flex items-center gap-6">
-                <div className="text-center">
-                  <div className="text-xs text-gray-400">Unrealized P&L</div>
-                  <div className={`font-bold ${
-                    currentPosition.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
-                  }`}>
-                    {currentPosition.unrealizedPnL >= 0 ? '+' : ''}{formatPrice(currentPosition.unrealizedPnL)} USDT
-                    <span className={`text-xs ml-2 ${
-                      currentPosition.unrealizedPnLPercent >= 0 ? 'text-green-400/70' : 'text-red-400/70'
-                    }`}>
-                      ({currentPosition.unrealizedPnLPercent >= 0 ? '+' : ''}{currentPosition.unrealizedPnLPercent.toFixed(2)}%)
-                  </span>
-                </div>
-              </div>
-              {strategyPerf?.config && (
-                  <>
-                    <div className="text-center">
-                      <div className="text-xs text-gray-400 flex items-center justify-center gap-1">
-                        Take Profit
-                        <span className="text-green-400/70">
-                          (+{strategyPerf.config.profitTargetPercent || 0}%)
-                        </span>
-                      </div>
-                      <div className="text-green-400 font-mono font-bold">
-                        ${formatPrice(currentPosition.entryPrice * (1 + (strategyPerf.config.profitTargetPercent || 0) / 100))}
-                      </div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-xs text-gray-400 flex items-center justify-center gap-1">
-                        Stop Loss
-                        <span className="text-red-400/70">
-                          (-{strategyPerf.config.stopLossPercent || 0}%)
-                        </span>
-                      </div>
-                      <div className="text-red-400 font-mono font-bold">
-                        ${formatPrice(currentPosition.entryPrice * (1 - (strategyPerf.config.stopLossPercent || 0) / 100))}
-                      </div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-xs text-gray-400">Time Left</div>
-                      <div className="text-orange-400 font-mono font-bold">
-                        {strategyPerf?.config && strategyPerf.config.maxPositionTime ? 
-                          formatDuration(Math.max(0, (strategyPerf.config.maxPositionTime * 60000) - (Date.now() - currentPosition.entryTime))) :
-                          '∞'
-                        }
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Tab Content */}
         <div className="p-6">
-          {activeTab === 'statistics' && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <HiTrendingUp className="w-3.5 h-3.5 text-green-400" />
-                  <span className="text-xs text-gray-400">Win Rate</span>
+          {/* Statistics Cards - Enhanced */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            {/* Win Rate */}
+            <div className="bg-gradient-to-br from-green-900/20 to-green-800/10 border border-green-600/20 rounded-xl p-4 hover:border-green-500/40 transition-all">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-green-400/80 uppercase tracking-wide">Win Rate</span>
+                <div className="p-1.5 bg-green-500/10 rounded-lg">
+                  <HiTrendingUp className="w-4 h-4 text-green-400" />
                 </div>
-                <div className="text-lg font-bold text-white">{stats.winRate.toFixed(1)}%</div>
-                <div className="text-[10px] text-gray-500">{stats.winningTrades}/{stats.totalTrades} trades</div>
+                </div>
+              <div className="text-2xl font-bold text-white mb-1">{stats.winRate.toFixed(1)}%</div>
+              <div className="flex items-center gap-1.5">
+                <div className="flex-1 bg-gray-700/50 rounded-full h-1.5 overflow-hidden">
+                  <div 
+                    className="bg-gradient-to-r from-green-500 to-green-400 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(stats.winRate, 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] text-gray-400 font-mono">{stats.winningTrades}/{stats.totalTrades}</span>
+                </div>
               </div>
-              
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <HiCurrencyDollar className="w-3.5 h-3.5 text-blue-400" />
-                  <span className="text-xs text-gray-400">Total P&L</span>
-                </div>
-                <div className={`text-lg font-bold ${stats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {stats.totalPnL >= 0 ? '+' : ''}{formatPrice(stats.totalPnL)} USDT
-                </div>
-                <div className="text-[10px] text-gray-500">All time</div>
-              </div>
-              
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <HiLightningBolt className="w-3.5 h-3.5 text-yellow-400" />
-                  <span className="text-xs text-gray-400">Best Trade</span>
-                </div>
-                <div className="text-lg font-bold text-green-400">+{formatPrice(stats.bestTrade)}</div>
-                <div className="text-[10px] text-gray-500">USDT</div>
-              </div>
-              
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <HiClock className="w-3.5 h-3.5 text-purple-400" />
-                  <span className="text-xs text-gray-400">Avg Duration</span>
-                </div>
-                <div className="text-lg font-bold text-white">{formatDuration(stats.avgDuration)}</div>
-                <div className="text-[10px] text-gray-500">Per trade</div>
-              </div>
-            </div>
-          )}
 
-          {activeTab === 'signals' && (
-            <div className="space-y-1.5 max-h-96 overflow-y-auto">
-              {allSignals.map((signal, index) => (
-                <div key={index} className="bg-gray-700/30 rounded-lg p-2 border border-gray-600/30">
-                  <div className="flex items-center justify-between">
+            {/* Total P&L */}
+            <div className={`bg-gradient-to-br ${
+              stats.totalPnL >= 0 
+                ? 'from-blue-900/20 to-blue-800/10 border-blue-600/20 hover:border-blue-500/40' 
+                : 'from-red-900/20 to-red-800/10 border-red-600/20 hover:border-red-500/40'
+            } border rounded-xl p-4 transition-all`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className={`text-xs font-medium uppercase tracking-wide ${
+                  stats.totalPnL >= 0 ? 'text-blue-400/80' : 'text-red-400/80'
+                }`}>Total P&L</span>
+                <div className={`p-1.5 rounded-lg ${
+                  stats.totalPnL >= 0 ? 'bg-blue-500/10' : 'bg-red-500/10'
+                }`}>
+                  <HiCurrencyDollar className={`w-4 h-4 ${
+                    stats.totalPnL >= 0 ? 'text-blue-400' : 'text-red-400'
+                  }`} />
+                </div>
+              </div>
+              <div className={`text-2xl font-bold mb-1 ${
+                stats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+              }`}>
+                {stats.totalPnL >= 0 ? '+' : ''}{formatPrice(stats.totalPnL)}
+              </div>
+              <div className="text-[10px] text-gray-400 font-medium">USDT · All time</div>
+            </div>
+            
+            {/* Best Trade */}
+            <div className="bg-gradient-to-br from-yellow-900/20 to-yellow-800/10 border border-yellow-600/20 rounded-xl p-4 hover:border-yellow-500/40 transition-all">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-yellow-400/80 uppercase tracking-wide">Best Trade</span>
+                <div className="p-1.5 bg-yellow-500/10 rounded-lg">
+                  <HiLightningBolt className="w-4 h-4 text-yellow-400" />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-green-400 mb-1">
+                +{formatPrice(stats.bestTrade)}
+              </div>
+              <div className="text-[10px] text-gray-400 font-medium">USDT · Highest profit</div>
+              </div>
+              
+            {/* Avg Duration */}
+            <div className="bg-gradient-to-br from-purple-900/20 to-purple-800/10 border border-purple-600/20 rounded-xl p-4 hover:border-purple-500/40 transition-all">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-purple-400/80 uppercase tracking-wide">Avg Time</span>
+                <div className="p-1.5 bg-purple-500/10 rounded-lg">
+                  <HiClock className="w-4 h-4 text-purple-400" />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-white mb-1">{formatDuration(stats.avgDuration)}</div>
+              <div className="text-[10px] text-gray-400 font-medium">Per trade average</div>
+            </div>
+          </div>
+
+          {/* Trades List Header */}
+          <div className="mb-4 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold border ${getSignalColor(signal.type)}`}>
-                        {signal.type}
-                      </span>
-                      <span className="text-white font-mono font-semibold text-sm">${formatPrice(signal.price)}</span>
-                      <span className="text-gray-400 text-xs">{formatTime(signal.timestamp)}</span>
-                      {signal.strategyType && (() => {
-                        const colors = getStrategyColor(signal.strategyType);
-                        return (
-                          <>
-                            <span className="text-gray-600 text-xs">/</span>
-                            <span className={`text-xs ${colors.text} font-medium`}>
-                              {signal.strategyName}
-                            </span>
-                            <span className="text-gray-600 text-xs">/</span>
-                          </>
-                        );
-                      })()}
+              <div className="p-1.5 bg-gray-700/50 rounded-lg">
+                <HiTrendingUp className="w-4 h-4 text-gray-400" />
                     </div>
-                    <span className="text-gray-400 text-xs max-w-md truncate">
-                      {signal.reason}
+              <h4 className="text-sm font-semibold text-white">Recent Trades</h4>
+              <span className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded-md font-medium">
+                {completedTrades.length}
                     </span>
-                  </div>
-                </div>
-              ))}
+            </div>
+            {completedTrades.length > 0 && (
+              <div className="text-xs text-gray-500">
+                Click to see entry/exit details
             </div>
           )}
-
-          {activeTab === 'trades' && (
+          </div>
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {completedTrades.map((trade, index) => {
                 const isWin = trade.pnl > 0;
@@ -425,6 +248,7 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                 return (
                   <div 
                     key={index} 
+                    id={`trade-${trade.exitTime}`}
                     className={`rounded-lg p-3 border cursor-pointer transition-all hover:border-opacity-50 ${
                       isWin 
                         ? 'bg-green-900/10 border-green-500/20' 
@@ -477,7 +301,7 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                         {/* Timestamp */}
                         <div className="flex items-center gap-2 text-gray-500 text-xs">
                           {selectedStrategy === 'GLOBAL' && trade.strategyType && (() => {
-                            const colors = getStrategyColor(trade.strategyType);
+                            const colors = getStrategyColor(trade.strategyType, trade.customColor);
                             // Map strategy type to bg color
                             const bgColorMap: Record<string, string> = {
                               'RSI_EMA': 'bg-blue-500/20',
@@ -485,7 +309,21 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                               'VOLUME_MACD': 'bg-orange-500/20',
                               'NEURAL_SCALPER': 'bg-pink-500/20',
                               'BOLLINGER_BOUNCE': 'bg-teal-500/20',
-                              'TREND_FOLLOWER': 'bg-cyan-500/20'
+                              'TREND_FOLLOWER': 'bg-cyan-500/20',
+                              'CUSTOM': colors.text.includes('emerald') ? 'bg-emerald-500/20' :
+                                        colors.text.includes('rose') ? 'bg-rose-500/20' :
+                                        colors.text.includes('indigo') ? 'bg-indigo-500/20' :
+                                        colors.text.includes('violet') ? 'bg-violet-500/20' :
+                                        colors.text.includes('amber') ? 'bg-amber-500/20' :
+                                        colors.text.includes('lime') ? 'bg-lime-500/20' :
+                                        colors.text.includes('sky') ? 'bg-sky-500/20' :
+                                        colors.text.includes('fuchsia') ? 'bg-fuchsia-500/20' :
+                                        colors.text.includes('pink') ? 'bg-pink-500/20' :
+                                        colors.text.includes('red') ? 'bg-red-500/20' :
+                                        colors.text.includes('green') ? 'bg-green-500/20' :
+                                        colors.text.includes('slate') ? 'bg-slate-500/20' :
+                                        colors.text.includes('stone') ? 'bg-stone-500/20' :
+                                        'bg-gray-500/20'
                             };
                             const bgColor = bgColorMap[trade.strategyType] || 'bg-gray-500/20';
                             
@@ -525,7 +363,6 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                 );
               })}
             </div>
-          )}
         </div>
       </div>
     </div>

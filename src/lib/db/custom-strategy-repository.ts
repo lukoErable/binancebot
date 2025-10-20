@@ -24,22 +24,24 @@ export class CustomStrategyRepository {
       stopLossPercent: config.stopLossPercent,
       maxPositionTime: config.maxPositionTime / (60 * 1000), // Convert to minutes
       positionSize: config.positionSize,
-      cooldownPeriod: config.cooldownPeriod / (60 * 1000), // Convert to minutes
+      cooldownPeriod: config.cooldownPeriod > 0 ? config.cooldownPeriod / (60 * 1000) : 0, // Convert to minutes, 0 stays 0
       simulationMode: config.simulationMode,
       color: config.color || 'fuchsia' // Store color
     });
     
+    const timeframe = config.timeframe || '1m';
+    
     await db.query(`
-      INSERT INTO strategies (name, type, is_active, config)
-      VALUES ($1, $2, $3, $4::jsonb)
-      ON CONFLICT (name) 
+      INSERT INTO strategies (name, type, is_active, config, timeframe)
+      VALUES ($1, $2, $3, $4::jsonb, $5)
+      ON CONFLICT (name, timeframe) 
       DO UPDATE SET 
         type = $2,
         config = $4::jsonb,
         updated_at = CURRENT_TIMESTAMP
-    `, [config.name, config.strategyType, false, configJson]);
+    `, [config.name, config.strategyType, false, configJson, timeframe]);
     
-    console.log(`✅ Custom strategy "${config.name}" saved to database`);
+    console.log(`✅ Custom strategy "${config.name}" [${timeframe}] saved to database`);
   }
   
   /**
@@ -74,14 +76,15 @@ export class CustomStrategyRepository {
         shortEntryConditions: config.shortEntryConditions,
         longExitConditions: config.longExitConditions,
         shortExitConditions: config.shortExitConditions,
-        profitTargetPercent: config.profitTargetPercent || 2.0,
-        stopLossPercent: config.stopLossPercent || 1.5,
-        maxPositionTime: (config.maxPositionTime || 60) * 60 * 1000, // Convert from minutes
+        profitTargetPercent: config.profitTargetPercent ?? 2.0,
+        stopLossPercent: config.stopLossPercent ?? 1.5,
+        maxPositionTime: (config.maxPositionTime ?? 60) * 60 * 1000, // Convert from minutes, null stays null
         positionSize: config.positionSize || 0.05,
-        cooldownPeriod: (config.cooldownPeriod || 5) * 60 * 1000, // Convert from minutes
+        cooldownPeriod: config.cooldownPeriod !== null && config.cooldownPeriod !== undefined ? config.cooldownPeriod * 60 * 1000 : 0, // Convert from minutes, null/undefined = 0 (no cooldown)
         simulationMode: config.simulationMode !== false,
         isActive: row.is_active !== false, // Get active state from DB
-        color: config.color || 'fuchsia' // Get color from DB
+        color: config.color || 'fuchsia', // Get color from DB
+        timeframe: row.timeframe || '1m' // Get timeframe from DB
       };
     } catch (error) {
       console.error(`Failed to parse custom strategy config for ${name}:`, error);
@@ -118,14 +121,15 @@ export class CustomStrategyRepository {
           shortEntryConditions: config.shortEntryConditions,
           longExitConditions: config.longExitConditions,
           shortExitConditions: config.shortExitConditions,
-          profitTargetPercent: config.profitTargetPercent || 2.0,
-          stopLossPercent: config.stopLossPercent || 1.5,
-          maxPositionTime: (config.maxPositionTime || 60) * 60 * 1000,
+          profitTargetPercent: config.profitTargetPercent ?? 2.0,
+          stopLossPercent: config.stopLossPercent ?? 1.5,
+          maxPositionTime: (config.maxPositionTime ?? 60) * 60 * 1000, // Convert from minutes
           positionSize: config.positionSize || 0.05,
-          cooldownPeriod: (config.cooldownPeriod || 5) * 60 * 1000,
+          cooldownPeriod: config.cooldownPeriod !== null && config.cooldownPeriod !== undefined ? config.cooldownPeriod * 60 * 1000 : 0, // Convert from minutes, null/undefined = 0 (no cooldown)
           simulationMode: config.simulationMode !== false,
           isActive: row.is_active !== false, // Get active state from DB
-          color: config.color || 'fuchsia' // Get color from DB
+          color: config.color || 'fuchsia', // Get color from DB
+          timeframe: row.timeframe || '1m' // Get timeframe from DB
         });
       } catch (error) {
         console.error(`Failed to parse strategy ${row.name}:`, error);
@@ -136,12 +140,12 @@ export class CustomStrategyRepository {
   }
   
   /**
-   * Delete a custom strategy
+   * Delete a custom strategy (for a specific timeframe)
    */
-  static async deleteCustomStrategy(name: string): Promise<void> {
-    await db.query('DELETE FROM strategies WHERE name = $1 AND type = $2', [name, 'CUSTOM']);
+  static async deleteCustomStrategy(name: string, timeframe: string = '1m'): Promise<void> {
+    await db.query('DELETE FROM strategies WHERE name = $1 AND type = $2 AND timeframe = $3', [name, 'CUSTOM', timeframe]);
     
-    console.log(`✅ Custom strategy "${name}" deleted from database`);
+    console.log(`✅ Custom strategy "${name}" [${timeframe}] deleted from database`);
   }
   
   /**

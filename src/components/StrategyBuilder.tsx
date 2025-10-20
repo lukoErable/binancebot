@@ -1,9 +1,24 @@
 'use client';
 
-import { ComparisonOperator, Condition, ConditionBuilder, getConditionDescription, IndicatorKey } from '@/lib/condition-system';
 import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { useState } from 'react';
-import { HiPlus, HiTrash, HiX } from 'react-icons/hi';
+import { FaChartLine } from 'react-icons/fa';
+import {
+  HiArrowDown,
+  HiArrowUp,
+  HiCheckCircle,
+  HiClock,
+  HiCurrencyDollar,
+  HiLightningBolt,
+  HiPlus,
+  HiTrash,
+  HiX
+} from 'react-icons/hi';
+import {
+  RiBarChartBoxLine,
+  RiLineChartLine,
+  RiStockLine
+} from 'react-icons/ri';
 
 interface StrategyBuilderProps {
   onSave: (config: CustomStrategyConfig) => void;
@@ -11,693 +26,660 @@ interface StrategyBuilderProps {
   initialConfig?: Partial<CustomStrategyConfig>;
 }
 
-// Available indicators for selection
-const INDICATORS: { value: IndicatorKey; label: string; type: 'number' | 'boolean' }[] = [
-  // Price
-  { value: 'price', label: 'Current Price', type: 'number' },
-  { value: 'open', label: 'Open Price', type: 'number' },
-  { value: 'high', label: 'High Price', type: 'number' },
-  { value: 'low', label: 'Low Price', type: 'number' },
-  { value: 'volume', label: 'Volume', type: 'number' },
-  
-  // Moving Averages
-  { value: 'ema12', label: 'EMA 12', type: 'number' },
-  { value: 'ema26', label: 'EMA 26', type: 'number' },
-  { value: 'ema50', label: 'EMA 50', type: 'number' },
-  { value: 'ema100', label: 'EMA 100', type: 'number' },
-  { value: 'ema200', label: 'EMA 200', type: 'number' },
-  { value: 'sma7', label: 'SMA 7', type: 'number' },
-  { value: 'sma25', label: 'SMA 25', type: 'number' },
-  { value: 'sma50', label: 'SMA 50', type: 'number' },
-  { value: 'sma99', label: 'SMA 99', type: 'number' },
-  { value: 'sma200', label: 'SMA 200', type: 'number' },
-  
-  // RSI
-  { value: 'rsi', label: 'RSI (14)', type: 'number' },
-  { value: 'rsi9', label: 'RSI (9)', type: 'number' },
-  { value: 'rsi21', label: 'RSI (21)', type: 'number' },
-  
-  // MACD
-  { value: 'macd', label: 'MACD', type: 'number' },
-  { value: 'macdSignal', label: 'MACD Signal', type: 'number' },
-  { value: 'macdHistogram', label: 'MACD Histogram', type: 'number' },
-  // VWAP
-  { value: 'vwap', label: 'VWAP', type: 'number' },
-  
-  // Bollinger Bands
-  { value: 'bbUpper', label: 'BB Upper', type: 'number' },
-  { value: 'bbMiddle', label: 'BB Middle', type: 'number' },
-  { value: 'bbLower', label: 'BB Lower', type: 'number' },
-  { value: 'bbWidth', label: 'BB Width (%)', type: 'number' },
-  { value: 'bbPercent', label: 'BB %B', type: 'number' },
-  
-  // Volatility
-  { value: 'atr', label: 'ATR (14)', type: 'number' },
-  { value: 'atr14', label: 'ATR (14)', type: 'number' },
-  { value: 'atr21', label: 'ATR (21)', type: 'number' },
-  
-  // Stochastic
-  { value: 'stochK', label: 'Stochastic K', type: 'number' },
-  { value: 'stochD', label: 'Stochastic D', type: 'number' },
-  
-  // Others
-  { value: 'adx', label: 'ADX', type: 'number' },
-  { value: 'cci', label: 'CCI', type: 'number' },
-  { value: 'obv', label: 'OBV', type: 'number' },
-  
-  // Volume
-  { value: 'volumeSMA20', label: 'Volume SMA 20', type: 'number' },
-  { value: 'volumeRatio', label: 'Volume Ratio', type: 'number' },
-  
-  // Trend (Boolean)
-  { value: 'isBullishTrend', label: 'Bullish Trend (EMA50 > EMA200)', type: 'boolean' },
-  { value: 'isBearishTrend', label: 'Bearish Trend (EMA50 < EMA200)', type: 'boolean' },
-  { value: 'isUptrend', label: 'Price > EMA50', type: 'boolean' },
-  { value: 'isDowntrend', label: 'Price < EMA50', type: 'boolean' },
-  { value: 'isUptrendConfirmed3', label: 'Uptrend Confirmed (3 closes > EMA50)', type: 'boolean' },
-  { value: 'isDowntrendConfirmed3', label: 'Downtrend Confirmed (3 closes < EMA50)', type: 'boolean' },
-  { value: 'isTrendReversalUp', label: 'Trend Reversal Up', type: 'boolean' },
-  { value: 'isTrendReversalDown', label: 'Trend Reversal Down', type: 'boolean' },
-  
-  // Momentum (Boolean)
-  { value: 'isOversold', label: 'RSI Oversold (<30)', type: 'boolean' },
-  { value: 'isOverbought', label: 'RSI Overbought (>70)', type: 'boolean' },
-  
-  // MACD Signals (Boolean)
-  { value: 'isMACDBullish', label: 'MACD Bullish', type: 'boolean' },
-  { value: 'isMACDBearish', label: 'MACD Bearish', type: 'boolean' },
-  { value: 'isMACDCrossoverBullish', label: 'MACD Bullish Crossover', type: 'boolean' },
-  { value: 'isMACDCrossoverBearish', label: 'MACD Bearish Crossover', type: 'boolean' },
-  { value: 'isEMAFastSlowBullCross', label: 'EMA12>EMA26 Bull Cross', type: 'boolean' },
-  { value: 'isEMAFastSlowBearCross', label: 'EMA12<EMA26 Bear Cross', type: 'boolean' },
-  { value: 'isPriceCrossedAboveEMA50', label: 'Price Crossed Above EMA50', type: 'boolean' },
-  { value: 'isPriceCrossedBelowEMA50', label: 'Price Crossed Below EMA50', type: 'boolean' },
-  
-  // Volume (Boolean)
-  { value: 'isHighVolume', label: 'High Volume (>1.5x avg)', type: 'boolean' },
-  { value: 'isLowVolume', label: 'Low Volume (<0.5x avg)', type: 'boolean' },
-  { value: 'isPriceAboveVWAP', label: 'Price > VWAP', type: 'boolean' },
-  { value: 'isPriceBelowVWAP', label: 'Price < VWAP', type: 'boolean' },
-  { value: 'isNearVWAP', label: 'Near VWAP (±0.5%)', type: 'boolean' },
-  
-  // Bollinger Bands (Boolean)
-  { value: 'isNearBBLower', label: 'Near BB Lower Band', type: 'boolean' },
-  { value: 'isNearBBUpper', label: 'Near BB Upper Band', type: 'boolean' },
-  { value: 'isBelowBBLower', label: 'Below BB Lower Band', type: 'boolean' },
-  { value: 'isAboveBBUpper', label: 'Above BB Upper Band', type: 'boolean' },
-  
-  // Candle Patterns (Boolean)
-  { value: 'isBullishCandle', label: 'Bullish Candle', type: 'boolean' },
-  { value: 'isBearishCandle', label: 'Bearish Candle', type: 'boolean' },
-  { value: 'isBullishEngulfing', label: 'Bullish Engulfing', type: 'boolean' },
-  { value: 'isBearishEngulfing', label: 'Bearish Engulfing', type: 'boolean' },
-  { value: 'isDoji', label: 'Doji', type: 'boolean' },
-  { value: 'isHammer', label: 'Hammer', type: 'boolean' },
-  { value: 'isShootingStar', label: 'Shooting Star', type: 'boolean' }
-];
+type ConditionType = 'longEntry' | 'shortEntry' | 'longExit' | 'shortExit';
 
-const COMPARISON_OPERATORS: { value: ComparisonOperator; label: string }[] = [
-  { value: 'GT', label: '>' },
-  { value: 'GTE', label: '>=' },
-  { value: 'LT', label: '<' },
-  { value: 'LTE', label: '<=' },
-  { value: 'EQ', label: '=' },
-  { value: 'NEQ', label: '≠' }
+// Indicator categories for easy selection
+const INDICATOR_CATEGORIES = {
+  price: {
+    id: 'price',
+    label: 'Price',
+    icon: HiCurrencyDollar,
+    color: 'text-yellow-400',
+    indicators: [
+      { key: 'price', label: 'Current Price', type: 'comparison' as const },
+      { key: 'open', label: 'Open', type: 'comparison' as const },
+      { key: 'high', label: 'High', type: 'comparison' as const },
+      { key: 'low', label: 'Low', type: 'comparison' as const },
+      { key: 'volume', label: 'Volume', type: 'comparison' as const },
+    ]
+  },
+  movingAverages: {
+    id: 'movingAverages',
+    label: 'Moving Averages',
+    icon: RiLineChartLine,
+    color: 'text-blue-400',
+    indicators: [
+      { key: 'ema12', label: 'EMA 12', type: 'comparison' as const },
+      { key: 'ema26', label: 'EMA 26', type: 'comparison' as const },
+      { key: 'ema50', label: 'EMA 50', type: 'comparison' as const },
+      { key: 'ema100', label: 'EMA 100', type: 'comparison' as const },
+      { key: 'ema200', label: 'EMA 200', type: 'comparison' as const },
+      { key: 'sma7', label: 'SMA 7', type: 'comparison' as const },
+      { key: 'sma25', label: 'SMA 25', type: 'comparison' as const },
+      { key: 'sma50', label: 'SMA 50', type: 'comparison' as const },
+      { key: 'sma99', label: 'SMA 99', type: 'comparison' as const },
+      { key: 'sma200', label: 'SMA 200', type: 'comparison' as const },
+    ]
+  },
+  oscillators: {
+    id: 'oscillators',
+    label: 'Oscillators',
+    icon: RiStockLine,
+    color: 'text-purple-400',
+    indicators: [
+      { key: 'rsi', label: 'RSI (14)', type: 'comparison' as const },
+      { key: 'rsi9', label: 'RSI (9)', type: 'comparison' as const },
+      { key: 'rsi21', label: 'RSI (21)', type: 'comparison' as const },
+      { key: 'stochK', label: 'Stochastic %K', type: 'comparison' as const },
+      { key: 'stochD', label: 'Stochastic %D', type: 'comparison' as const },
+      { key: 'cci', label: 'CCI', type: 'comparison' as const },
+    ]
+  },
+  macd: {
+    id: 'macd',
+    label: 'MACD',
+    icon: RiBarChartBoxLine,
+    color: 'text-orange-400',
+    indicators: [
+      { key: 'macd', label: 'MACD', type: 'comparison' as const },
+      { key: 'macdSignal', label: 'MACD Signal', type: 'comparison' as const },
+      { key: 'macdHistogram', label: 'MACD Histogram', type: 'comparison' as const },
+      { key: 'isMACDBullish', label: 'MACD Bullish', type: 'boolean' as const },
+      { key: 'isMACDBearish', label: 'MACD Bearish', type: 'boolean' as const },
+    ]
+  },
+  trend: {
+    id: 'trend',
+    label: 'Trend',
+    icon: FaChartLine,
+    color: 'text-green-400',
+    indicators: [
+      { key: 'isUptrend', label: 'Uptrend', type: 'boolean' as const },
+      { key: 'isDowntrend', label: 'Downtrend', type: 'boolean' as const },
+      { key: 'isBullishTrend', label: 'Bullish Trend', type: 'boolean' as const },
+      { key: 'isBearishTrend', label: 'Bearish Trend', type: 'boolean' as const },
+      { key: 'adx', label: 'ADX', type: 'comparison' as const },
+    ]
+  },
+  bollinger: {
+    id: 'bollinger',
+    label: 'Bollinger Bands',
+    icon: HiLightningBolt,
+    color: 'text-teal-400',
+    indicators: [
+      { key: 'bbUpper', label: 'BB Upper', type: 'comparison' as const },
+      { key: 'bbMiddle', label: 'BB Middle', type: 'comparison' as const },
+      { key: 'bbLower', label: 'BB Lower', type: 'comparison' as const },
+      { key: 'isAboveBBUpper', label: 'Above BB Upper', type: 'boolean' as const },
+      { key: 'isBelowBBLower', label: 'Below BB Lower', type: 'boolean' as const },
+    ]
+  },
+  volume: {
+    id: 'volume',
+    label: 'Volume & VWAP',
+    icon: HiClock,
+    color: 'text-indigo-400',
+    indicators: [
+      { key: 'vwap', label: 'VWAP', type: 'comparison' as const },
+      { key: 'obv', label: 'OBV', type: 'comparison' as const },
+      { key: 'isHighVolume', label: 'High Volume', type: 'boolean' as const },
+      { key: 'isLowVolume', label: 'Low Volume', type: 'boolean' as const },
+      { key: 'isPriceAboveVWAP', label: 'Price > VWAP', type: 'boolean' as const },
+      { key: 'isPriceBelowVWAP', label: 'Price < VWAP', type: 'boolean' as const },
+    ]
+  },
+};
+
+interface SimpleCondition {
+  indicator: string;
+  type: 'comparison' | 'boolean';
+  operator?: 'LT' | 'GT' | 'EQ' | 'LTE' | 'GTE';
+  value?: number | string; // Can be a number or an indicator key
+  compareType?: 'number' | 'indicator'; // What to compare against
+}
+
+const AVAILABLE_COLORS = [
+  { value: 'emerald', label: 'Emerald', class: 'bg-emerald-500' },
+  { value: 'rose', label: 'Rose', class: 'bg-rose-500' },
+  { value: 'indigo', label: 'Indigo', class: 'bg-indigo-500' },
+  { value: 'violet', label: 'Violet', class: 'bg-violet-500' },
+  { value: 'amber', label: 'Amber', class: 'bg-amber-500' },
+  { value: 'lime', label: 'Lime', class: 'bg-lime-500' },
+  { value: 'sky', label: 'Sky', class: 'bg-sky-500' },
+  { value: 'fuchsia', label: 'Fuchsia', class: 'bg-fuchsia-500' },
+  { value: 'pink', label: 'Pink', class: 'bg-pink-500' },
+  { value: 'red', label: 'Red', class: 'bg-red-500' },
+  { value: 'green', label: 'Green', class: 'bg-green-500' },
+  { value: 'slate', label: 'Slate', class: 'bg-slate-500' },
 ];
 
 export default function StrategyBuilder({ onSave, onClose, initialConfig }: StrategyBuilderProps) {
   const [name, setName] = useState(initialConfig?.name || '');
   const [description, setDescription] = useState(initialConfig?.description || '');
+  const [color, setColor] = useState(initialConfig?.color || 'emerald');
   
-  // Long entry conditions
-  const [longEntryConditions, setLongEntryConditions] = useState<Condition[]>(
-    initialConfig?.longEntryConditions?.conditions as Condition[] || []
-  );
-  
-  // Short entry conditions
-  const [shortEntryConditions, setShortEntryConditions] = useState<Condition[]>(
-    initialConfig?.shortEntryConditions?.conditions as Condition[] || []
-  );
+  // Conditions for each type
+  const [longEntryConditions, setLongEntryConditions] = useState<SimpleCondition[]>([]);
+  const [shortEntryConditions, setShortEntryConditions] = useState<SimpleCondition[]>([]);
+  const [longExitConditions, setLongExitConditions] = useState<SimpleCondition[]>([]);
+  const [shortExitConditions, setShortExitConditions] = useState<SimpleCondition[]>([]);
   
   // Risk management
   const [profitTarget, setProfitTarget] = useState(initialConfig?.profitTargetPercent || 2.0);
   const [stopLoss, setStopLoss] = useState(initialConfig?.stopLossPercent || 1.5);
-  const [maxPositionTime, setMaxPositionTime] = useState((initialConfig?.maxPositionTime || 60 * 60 * 1000) / (60 * 1000)); // Convert to minutes
-  const [positionSize, setPositionSize] = useState(initialConfig?.positionSize || 0.01);
-  const [cooldownPeriod, setCooldownPeriod] = useState((initialConfig?.cooldownPeriod || 5 * 60 * 1000) / (60 * 1000)); // Convert to minutes
+  const [maxPositionTime, setMaxPositionTime] = useState((initialConfig?.maxPositionTime || 120 * 60 * 1000) / 60000);
+  const [cooldownPeriod, setCooldownPeriod] = useState((initialConfig?.cooldownPeriod || 0) / 60000);
+  const [positionSize, setPositionSize] = useState(initialConfig?.positionSize || 0.05);
   
-  // AI Generation
-  const [showAIModal, setShowAIModal] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiType, setAiType] = useState<'aggressive' | 'balanced' | 'conservative'>('balanced');
-  const [isGenerating, setIsGenerating] = useState(false);
-  
-  // Add condition modal
-  const [showAddCondition, setShowAddCondition] = useState<'long' | 'short' | null>(null);
-  const [newConditionType, setNewConditionType] = useState<'comparison' | 'boolean'>('comparison');
-  const [newConditionIndicator, setNewConditionIndicator] = useState<IndicatorKey>('rsi');
-  const [newConditionOperator, setNewConditionOperator] = useState<ComparisonOperator>('LT');
-  const [newConditionValue, setNewConditionValue] = useState<number>(30);
-  const [newConditionBoolValue, setNewConditionBoolValue] = useState<boolean>(true);
-  
-  const addCondition = (type: 'long' | 'short') => {
-    let condition: Condition;
-    
-    const indicatorInfo = INDICATORS.find(i => i.value === newConditionIndicator);
-    
-    if (indicatorInfo?.type === 'boolean' || newConditionType === 'boolean') {
-      condition = ConditionBuilder.boolean(newConditionIndicator, newConditionBoolValue);
-    } else {
-      condition = ConditionBuilder.compare(newConditionIndicator, newConditionOperator, newConditionValue);
-    }
-    
-    if (type === 'long') {
-      setLongEntryConditions([...longEntryConditions, condition]);
-    } else {
-      setShortEntryConditions([...shortEntryConditions, condition]);
-    }
-    
-    setShowAddCondition(null);
-  };
-  
-  const removeCondition = (type: 'long' | 'short', index: number) => {
-    if (type === 'long') {
-      setLongEntryConditions(longEntryConditions.filter((_, i) => i !== index));
-    } else {
-      setShortEntryConditions(shortEntryConditions.filter((_, i) => i !== index));
+  // UI state
+  const [activeSection, setActiveSection] = useState<ConditionType>('longEntry');
+  const [selectedCategory, setSelectedCategory] = useState<string>('price');
+
+  const addCondition = (indicator: any) => {
+    const newCondition: SimpleCondition = {
+      indicator: indicator.key,
+      type: indicator.type,
+      ...(indicator.type === 'comparison' && {
+        operator: 'GT',
+        value: 0,
+        compareType: 'number'
+      })
+    };
+
+    switch (activeSection) {
+      case 'longEntry':
+        setLongEntryConditions([...longEntryConditions, newCondition]);
+        break;
+      case 'shortEntry':
+        setShortEntryConditions([...shortEntryConditions, newCondition]);
+        break;
+      case 'longExit':
+        setLongExitConditions([...longExitConditions, newCondition]);
+        break;
+      case 'shortExit':
+        setShortExitConditions([...shortExitConditions, newCondition]);
+        break;
     }
   };
-  
-  const handleAIGenerate = async () => {
-    setIsGenerating(true);
-    try {
-      const response = await fetch('/api/ai-strategy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: aiPrompt,
-          type: aiType
-        })
-      });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to generate strategy');
-      }
-
-      const strategy = data.strategy;
-
-      // Populate form with AI-generated strategy
-      setName(strategy.name || '');
-      setDescription(strategy.description || '');
-      setLongEntryConditions(strategy.longEntryConditions?.conditions || []);
-      setShortEntryConditions(strategy.shortEntryConditions?.conditions || []);
-      setProfitTarget(strategy.profitTargetPercent || 2.0);
-      setStopLoss(strategy.stopLossPercent || 1.5);
-      setMaxPositionTime((strategy.maxPositionTime || 60 * 60 * 1000) / (60 * 1000));
-      setPositionSize(strategy.positionSize || 0.01);
-      setCooldownPeriod((strategy.cooldownPeriod || 5 * 60 * 1000) / (60 * 1000));
-
-      setShowAIModal(false);
-      console.log('✨ Strategy generated by AI! Review and save when ready.');
-    } catch (error: any) {
-      console.error('Error generating strategy:', error);
-    } finally {
-      setIsGenerating(false);
+  const removeCondition = (index: number, type: ConditionType) => {
+    switch (type) {
+      case 'longEntry':
+        setLongEntryConditions(longEntryConditions.filter((_, i) => i !== index));
+        break;
+      case 'shortEntry':
+        setShortEntryConditions(shortEntryConditions.filter((_, i) => i !== index));
+        break;
+      case 'longExit':
+        setLongExitConditions(longExitConditions.filter((_, i) => i !== index));
+        break;
+      case 'shortExit':
+        setShortExitConditions(shortExitConditions.filter((_, i) => i !== index));
+        break;
     }
+  };
+
+  const updateCondition = (index: number, type: ConditionType, updates: Partial<SimpleCondition>) => {
+    const updateArray = (conditions: SimpleCondition[]) => 
+      conditions.map((cond, i) => i === index ? { ...cond, ...updates } : cond);
+
+    switch (type) {
+      case 'longEntry':
+        setLongEntryConditions(updateArray(longEntryConditions));
+        break;
+      case 'shortEntry':
+        setShortEntryConditions(updateArray(shortEntryConditions));
+        break;
+      case 'longExit':
+        setLongExitConditions(updateArray(longExitConditions));
+        break;
+      case 'shortExit':
+        setShortExitConditions(updateArray(shortExitConditions));
+        break;
+    }
+  };
+
+  const convertToConditionGroup = (conditions: SimpleCondition[]) => {
+    return {
+      operator: 'AND' as const,
+      conditions: conditions.map(cond => {
+        if (cond.type === 'comparison') {
+          return {
+            type: 'comparison' as const,
+            indicator: cond.indicator as any,
+            operator: cond.operator!,
+            value: (typeof cond.value === 'string' ? cond.value : cond.value!) as any
+          };
+        } else {
+          return {
+            type: 'boolean' as const,
+            indicator: cond.indicator as any,
+            value: true
+          };
+        }
+      })
+    } as any; // Cast to bypass TypeScript strict checking for dynamic indicator keys
   };
 
   const handleSave = () => {
-    if (!name) {
+    if (!name.trim()) {
       alert('Please enter a strategy name');
       return;
     }
-    
-    if (longEntryConditions.length === 0 && shortEntryConditions.length === 0) {
-      alert('Please add at least one entry condition');
+
+    if (longEntryConditions.length === 0 || shortEntryConditions.length === 0) {
+      alert('Please add at least one condition for both Long and Short entry');
       return;
     }
-    
+
     const config: CustomStrategyConfig = {
-      name,
-      description,
+      name: name.trim(),
+      description: description.trim(),
+      color,
       strategyType: 'CUSTOM',
-      longEntryConditions: {
-        operator: 'AND',
-        conditions: longEntryConditions
-      },
-      shortEntryConditions: {
-        operator: 'AND',
-        conditions: shortEntryConditions
-      },
+      longEntryConditions: convertToConditionGroup(longEntryConditions),
+      shortEntryConditions: convertToConditionGroup(shortEntryConditions),
+      ...(longExitConditions.length > 0 && {
+        longExitConditions: convertToConditionGroup(longExitConditions)
+      }),
+      ...(shortExitConditions.length > 0 && {
+        shortExitConditions: convertToConditionGroup(shortExitConditions)
+      }),
       profitTargetPercent: profitTarget,
       stopLossPercent: stopLoss,
-      maxPositionTime: maxPositionTime * 60 * 1000, // Convert to milliseconds
+      maxPositionTime: maxPositionTime * 60 * 1000,
       positionSize,
-      cooldownPeriod: cooldownPeriod * 60 * 1000, // Convert to milliseconds
+      cooldownPeriod: cooldownPeriod * 60 * 1000,
+      timeframe: '1m', // Default timeframe for new strategies
       simulationMode: true
     };
-    
+
     onSave(config);
   };
-  
+
+  const getCurrentConditions = () => {
+    switch (activeSection) {
+      case 'longEntry': return longEntryConditions;
+      case 'shortEntry': return shortEntryConditions;
+      case 'longExit': return longExitConditions;
+      case 'shortExit': return shortExitConditions;
+    }
+  };
+
+  const getIndicatorLabel = (key: string) => {
+    for (const category of Object.values(INDICATOR_CATEGORIES)) {
+      const indicator = category.indicators.find(ind => ind.key === key);
+      if (indicator) return indicator.label;
+    }
+    return key;
+  };
+
+  // Get all numeric indicators for comparison selection
+  const getAllNumericIndicators = () => {
+    const indicators: { key: string; label: string; category: string }[] = [];
+    Object.values(INDICATOR_CATEGORIES).forEach(category => {
+      category.indicators
+        .filter(ind => ind.type === 'comparison')
+        .forEach(ind => {
+          indicators.push({
+            key: ind.key,
+            label: ind.label,
+            category: category.label
+          });
+        });
+    });
+    return indicators;
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto border border-gray-700">
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[90vw] max-w-7xl h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="sticky top-0 bg-gray-900 border-b border-gray-700 p-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h2 className="text-xl font-bold text-white">🛠️ Strategy Builder</h2>
-            <button
-              onClick={() => setShowAIModal(true)}
-              className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg font-semibold transition-colors flex items-center gap-2"
-              title="Generate strategy with AI"
-            >
-              <span className="text-lg">🤖</span>
-              Generate with AI
-            </button>
+        <div className="flex items-center justify-between p-6 border-b border-gray-700">
+          <div className="flex-1">
+            <h2 className="text-2xl font-bold text-white mb-2">Create Custom Strategy</h2>
+            <p className="text-sm text-gray-400">Build your trading strategy by selecting indicators and conditions</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
-            <HiX className="w-6 h-6" />
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
+          >
+            <HiX className="w-6 h-6 text-gray-400" />
           </button>
         </div>
-        
-        <div className="p-6 space-y-6">
-          {/* Basic Info */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-white">📋 Basic Information</h3>
+
+        {/* Content */}
+        <div className="flex-1 overflow-hidden flex">
+          {/* Left: Configuration */}
+          <div className="w-80 border-r border-gray-700 p-6 overflow-y-auto">
+            <h3 className="text-lg font-semibold text-white mb-4">Strategy Info</h3>
             
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">Strategy Name</label>
+            {/* Name */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-2">Strategy Name *</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
                 placeholder="My Custom Strategy"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
               />
             </div>
-            
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">Description (optional)</label>
+
+            {/* Description */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-2">Description</label>
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500 h-20 resize-none"
-                placeholder="Describe your strategy..."
+                placeholder="Optional description..."
+                rows={3}
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600 resize-none"
+              />
+            </div>
+
+            {/* Color */}
+            <div className="mb-6">
+              <label className="block text-xs text-gray-400 mb-2">Color</label>
+              <div className="grid grid-cols-4 gap-2">
+                {AVAILABLE_COLORS.map(c => (
+                  <button
+                    key={c.value}
+                    onClick={() => setColor(c.value)}
+                    className={`h-8 rounded ${c.class} ${color === c.value ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900' : 'opacity-50 hover:opacity-100'} transition-all`}
+                    title={c.label}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <h3 className="text-lg font-semibold text-white mb-4 pt-4 border-t border-gray-700">Risk Management</h3>
+            
+            {/* Take Profit */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-2">Take Profit (%)</label>
+              <input
+                type="number"
+                value={profitTarget}
+                onChange={(e) => setProfitTarget(parseFloat(e.target.value))}
+                step="0.1"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
+              />
+            </div>
+
+            {/* Stop Loss */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-2">Stop Loss (%)</label>
+              <input
+                type="number"
+                value={stopLoss}
+                onChange={(e) => setStopLoss(parseFloat(e.target.value))}
+                step="0.1"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
+              />
+            </div>
+
+            {/* Max Position Time */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-2">Max Position Time (min)</label>
+              <input
+                type="number"
+                value={maxPositionTime}
+                onChange={(e) => setMaxPositionTime(parseFloat(e.target.value))}
+                step="1"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
+              />
+            </div>
+
+            {/* Cooldown */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-2">Cooldown (min)</label>
+              <input
+                type="number"
+                value={cooldownPeriod}
+                onChange={(e) => setCooldownPeriod(parseFloat(e.target.value))}
+                step="1"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
+              />
+            </div>
+
+            {/* Position Size */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-2">Position Size (0-1)</label>
+              <input
+                type="number"
+                value={positionSize}
+                onChange={(e) => setPositionSize(parseFloat(e.target.value))}
+                step="0.01"
+                min="0"
+                max="1"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
               />
             </div>
           </div>
-          
-          {/* Long Entry Conditions */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-green-400">🟢 LONG Entry Conditions</h3>
-              <button
-                onClick={() => setShowAddCondition('long')}
-                className="flex items-center gap-2 px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-sm transition-colors"
-              >
-                <HiPlus className="w-4 h-4" />
-                Add Condition
-              </button>
-            </div>
-            
-            {longEntryConditions.length === 0 ? (
-              <div className="bg-gray-800 border border-gray-700 rounded p-4 text-center text-gray-500">
-                No conditions added yet. Click "Add Condition" to start.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {longEntryConditions.map((condition, index) => (
-                  <div key={index} className="flex items-center gap-2 bg-gray-800 border border-green-600/30 rounded p-3">
-                    <span className="flex-1 text-white text-sm">
-                      {getConditionDescription(condition)}
-                    </span>
+
+          {/* Middle: Condition Builder */}
+          <div className="flex-1 flex flex-col">
+            {/* Section Tabs */}
+            <div className="border-b border-gray-700 p-4">
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { id: 'longEntry', label: 'Long Entry', icon: HiArrowUp, color: 'text-green-400', count: longEntryConditions.length },
+                  { id: 'shortEntry', label: 'Short Entry', icon: HiArrowDown, color: 'text-red-400', count: shortEntryConditions.length },
+                  { id: 'longExit', label: 'Exit Long', icon: HiArrowDown, color: 'text-orange-400', count: longExitConditions.length },
+                  { id: 'shortExit', label: 'Exit Short', icon: HiArrowUp, color: 'text-orange-400', count: shortExitConditions.length },
+                ].map(section => {
+                  const Icon = section.icon;
+                  return (
                     <button
-                      onClick={() => removeCondition('long', index)}
-                      className="text-red-400 hover:text-red-300 transition-colors"
+                      key={section.id}
+                      onClick={() => setActiveSection(section.id as ConditionType)}
+                      className={`flex items-center justify-between px-4 py-3 rounded-lg border-2 transition-all ${
+                        activeSection === section.id
+                          ? 'bg-gray-800 border-gray-600'
+                          : 'bg-gray-900/50 border-gray-700/50 hover:border-gray-600'
+                      }`}
                     >
-                      <HiTrash className="w-4 h-4" />
+                      <div className="flex items-center gap-2">
+                        <Icon className={`w-4 h-4 ${section.color}`} />
+                        <span className="text-sm font-medium text-white">{section.label}</span>
+                      </div>
+                      <span className="text-xs bg-gray-700 px-2 py-0.5 rounded">{section.count}</span>
                     </button>
-                  </div>
-                ))}
-                <div className="text-xs text-gray-500 italic px-3">
-                  All conditions must be true (AND logic)
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Current Conditions */}
+            <div className="p-6 border-b border-gray-700">
+              <h4 className="text-sm font-semibold text-white mb-3">
+                {activeSection === 'longEntry' && 'Long Entry Conditions (BUY)'}
+                {activeSection === 'shortEntry' && 'Short Entry Conditions (SELL)'}
+                {activeSection === 'longExit' && 'Long Exit Conditions (CLOSE LONG)'}
+                {activeSection === 'shortExit' && 'Short Exit Conditions (CLOSE SHORT)'}
+              </h4>
+              
+              {getCurrentConditions().length === 0 ? (
+                <div className="text-center py-8 text-gray-500 text-sm">
+                  No conditions yet. Select indicators below to add conditions.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {getCurrentConditions().map((condition, index) => {
+                    const operatorSymbol = 
+                      condition.operator === 'GT' ? '>' :
+                      condition.operator === 'LT' ? '<' :
+                      condition.operator === 'GTE' ? '≥' :
+                      condition.operator === 'LTE' ? '≤' :
+                      condition.operator === 'EQ' ? '=' : '?';
+                    
+                    return (
+                      <div key={index} className="flex items-center gap-3 bg-gray-800/50 p-3 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors">
+                        {/* Left side: Indicator name */}
+                        <div className="flex items-center gap-2 min-w-[140px]">
+                          <span className="text-xs text-gray-500 font-mono">{index + 1}.</span>
+                          <span className="text-sm text-white font-medium">{getIndicatorLabel(condition.indicator)}</span>
+                        </div>
+                        
+                        {condition.type === 'comparison' && (
+                          <>
+                            {/* Operator */}
+                            <select
+                              value={condition.operator}
+                              onChange={(e) => updateCondition(index, activeSection, { operator: e.target.value as any })}
+                              className="px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm font-mono focus:outline-none hover:bg-gray-600 transition-colors"
+                            >
+                              <option value="GT">&gt;</option>
+                              <option value="LT">&lt;</option>
+                              <option value="GTE">≥</option>
+                              <option value="LTE">≤</option>
+                              <option value="EQ">=</option>
+                            </select>
+                            
+                            {/* Value input or indicator selector */}
+                            {condition.compareType === 'number' ? (
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  value={typeof condition.value === 'number' ? condition.value : 0}
+                                  onChange={(e) => updateCondition(index, activeSection, { value: parseFloat(e.target.value) })}
+                                  className="w-28 px-3 py-1.5 bg-gray-700 border border-blue-600/50 rounded text-white text-sm font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                                  placeholder="Value"
+                                />
+                                <span className="text-xs text-blue-400 bg-blue-900/30 px-2 py-1 rounded font-semibold">NUM</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <select
+                                  value={typeof condition.value === 'string' ? condition.value : 'price'}
+                                  onChange={(e) => updateCondition(index, activeSection, { value: e.target.value })}
+                                  className="px-3 py-1.5 bg-gray-700 border border-purple-600/50 rounded text-white text-sm focus:outline-none focus:border-purple-500 min-w-[160px] transition-colors"
+                                >
+                                  {getAllNumericIndicators().map(ind => (
+                                    <option key={ind.key} value={ind.key}>
+                                      {ind.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <span className="text-xs text-purple-400 bg-purple-900/30 px-2 py-1 rounded font-semibold">IND</span>
+                              </div>
+                            )}
+                            
+                            {/* Toggle button */}
+                            <button
+                              onClick={() => updateCondition(index, activeSection, { 
+                                compareType: condition.compareType === 'number' ? 'indicator' : 'number',
+                                value: condition.compareType === 'number' ? 'price' : 0
+                              })}
+                              className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${
+                                condition.compareType === 'number'
+                                  ? 'bg-blue-900/30 text-blue-400 hover:bg-blue-900/50 border border-blue-600/50'
+                                  : 'bg-purple-900/30 text-purple-400 hover:bg-purple-900/50 border border-purple-600/50'
+                              }`}
+                              title={condition.compareType === 'number' 
+                                ? 'Click to compare with indicator' 
+                                : 'Click to compare with number'}
+                            >
+                              {condition.compareType === 'number' ? '123→IND' : 'IND→123'}
+                            </button>
+                          </>
+                        )}
+                        
+                        {condition.type === 'boolean' && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-400">=</span>
+                            <span className="text-xs text-green-400 bg-green-900/30 px-3 py-1.5 rounded font-semibold">TRUE</span>
+                          </div>
+                        )}
+                        
+                        <button
+                          onClick={() => removeCondition(index, activeSection)}
+                          className="ml-auto p-1.5 hover:bg-red-900/20 border border-transparent hover:border-red-600/50 rounded transition-all"
+                          title="Remove condition"
+                        >
+                          <HiTrash className="w-4 h-4 text-red-400" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Indicator Selection */}
+            <div className="flex-1 overflow-hidden flex flex-col p-6">
+              <h4 className="text-sm font-semibold text-white mb-3">Add Indicator</h4>
+              
+              {/* Category Tabs */}
+              <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+                {Object.values(INDICATOR_CATEGORIES).map(category => {
+                  const Icon = category.icon;
+                  return (
+                    <button
+                      key={category.id}
+                      onClick={() => setSelectedCategory(category.id)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border whitespace-nowrap transition-all ${
+                        selectedCategory === category.id
+                          ? 'bg-gray-800 border-gray-600'
+                          : 'bg-gray-900/50 border-gray-700/50 hover:border-gray-600'
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 ${category.color}`} />
+                      <span className="text-xs text-white">{category.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Indicators Grid */}
+              <div className="flex-1 overflow-y-auto">
+                <div className="grid grid-cols-3 gap-2">
+                  {INDICATOR_CATEGORIES[selectedCategory as keyof typeof INDICATOR_CATEGORIES].indicators.map(indicator => (
+                    <button
+                      key={indicator.key}
+                      onClick={() => addCondition(indicator)}
+                      className="flex items-center justify-between p-3 bg-gray-800/50 hover:bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-lg transition-all group"
+                    >
+                      <div className="flex items-center gap-2 flex-1">
+                        <HiPlus className="w-3 h-3 text-gray-500 group-hover:text-gray-300" />
+                        <span className="text-xs text-gray-300 truncate">{indicator.label}</span>
+                      </div>
+                      <span className={`text-[10px] px-2 py-0.5 rounded ${
+                        indicator.type === 'comparison' ? 'bg-blue-900/20 text-blue-400' : 'bg-green-900/20 text-green-400'
+                      }`}>
+                        {indicator.type === 'comparison' ? 'NUM' : 'BOOL'}
+                      </span>
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
-          </div>
-          
-          {/* Short Entry Conditions */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-red-400">🔴 SHORT Entry Conditions</h3>
-              <button
-                onClick={() => setShowAddCondition('short')}
-                className="flex items-center gap-2 px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-sm transition-colors"
-              >
-                <HiPlus className="w-4 h-4" />
-                Add Condition
-              </button>
-            </div>
-            
-            {shortEntryConditions.length === 0 ? (
-              <div className="bg-gray-800 border border-gray-700 rounded p-4 text-center text-gray-500">
-                No conditions added yet. Click "Add Condition" to start.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {shortEntryConditions.map((condition, index) => (
-                  <div key={index} className="flex items-center gap-2 bg-gray-800 border border-red-600/30 rounded p-3">
-                    <span className="flex-1 text-white text-sm">
-                      {getConditionDescription(condition)}
-                    </span>
-                    <button
-                      onClick={() => removeCondition('short', index)}
-                      className="text-red-400 hover:text-red-300 transition-colors"
-                    >
-                      <HiTrash className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-                <div className="text-xs text-gray-500 italic px-3">
-                  All conditions must be true (AND logic)
-                </div>
-              </div>
-            )}
-          </div>
-          
-          {/* Risk Management */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-white">⚠️ Risk Management</h3>
-            
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Take Profit (%)</label>
-                <input
-                  type="number"
-                  value={profitTarget}
-                  onChange={(e) => setProfitTarget(parseFloat(e.target.value))}
-                  step="0.1"
-                  min="0.1"
-                  className="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-green-500"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Stop Loss (%)</label>
-                <input
-                  type="number"
-                  value={stopLoss}
-                  onChange={(e) => setStopLoss(parseFloat(e.target.value))}
-                  step="0.1"
-                  min="0.1"
-                  className="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-red-500"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Max Position Time (minutes)</label>
-                <input
-                  type="number"
-                  value={maxPositionTime}
-                  onChange={(e) => setMaxPositionTime(parseInt(e.target.value))}
-                  step="1"
-                  min="1"
-                  className="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Cooldown (minutes)</label>
-                <input
-                  type="number"
-                  value={cooldownPeriod}
-                  onChange={(e) => setCooldownPeriod(parseInt(e.target.value))}
-                  step="1"
-                  min="0"
-                  className="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Position Size (BTC)</label>
-                <input
-                  type="number"
-                  value={positionSize}
-                  onChange={(e) => setPositionSize(parseFloat(e.target.value))}
-                  step="0.001"
-                  min="0.001"
-                  className="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-                />
-              </div>
             </div>
           </div>
-          
-          {/* Action Buttons */}
-          <div className="flex gap-3 pt-4 border-t border-gray-700">
-            <button
-              onClick={handleSave}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded transition-colors"
-            >
-              💾 Save Strategy
-            </button>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between p-6 border-t border-gray-700">
+          <div className="text-sm text-gray-400">
+            Strategy must have at least Long Entry and Short Entry conditions
+          </div>
+          <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="px-6 bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 rounded transition-colors"
+              className="px-6 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-white transition-colors"
             >
               Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-2 px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white font-medium transition-colors"
+            >
+              <HiCheckCircle className="w-5 h-5" />
+              Create Strategy
             </button>
           </div>
         </div>
       </div>
-      
-      {/* AI Generation Modal */}
-      {showAIModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg shadow-2xl max-w-2xl w-full mx-4 border border-purple-500/50">
-            <div className="p-4 border-b border-gray-700 bg-gradient-to-r from-purple-900/20 to-pink-900/20">
-              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <span className="text-2xl">🤖</span>
-                AI Strategy Generator
-              </h3>
-              <p className="text-sm text-gray-400 mt-1">
-                Let AI create a complete trading strategy for you
-              </p>
-            </div>
-            
-            <div className="p-6 space-y-4">
-              {/* Strategy Type */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-300 mb-2">Strategy Type</label>
-                <div className="grid grid-cols-3 gap-3">
-                  <button
-                    onClick={() => setAiType('aggressive')}
-                    className={`p-4 rounded-lg border-2 transition-all ${
-                      aiType === 'aggressive'
-                        ? 'border-red-500 bg-red-900/20'
-                        : 'border-gray-700 hover:border-gray-600'
-                    }`}
-                  >
-                    <div className="text-2xl mb-2">⚡</div>
-                    <div className="font-semibold text-white">Aggressive</div>
-                    <div className="text-xs text-gray-400 mt-1">Fast scalping</div>
-                  </button>
-                  <button
-                    onClick={() => setAiType('balanced')}
-                    className={`p-4 rounded-lg border-2 transition-all ${
-                      aiType === 'balanced'
-                        ? 'border-blue-500 bg-blue-900/20'
-                        : 'border-gray-700 hover:border-gray-600'
-                    }`}
-                  >
-                    <div className="text-2xl mb-2">⚖️</div>
-                    <div className="font-semibold text-white">Balanced</div>
-                    <div className="text-xs text-gray-400 mt-1">Medium term</div>
-                  </button>
-                  <button
-                    onClick={() => setAiType('conservative')}
-                    className={`p-4 rounded-lg border-2 transition-all ${
-                      aiType === 'conservative'
-                        ? 'border-green-500 bg-green-900/20'
-                        : 'border-gray-700 hover:border-gray-600'
-                    }`}
-                  >
-                    <div className="text-2xl mb-2">🛡️</div>
-                    <div className="font-semibold text-white">Conservative</div>
-                    <div className="text-xs text-gray-400 mt-1">Trend following</div>
-                  </button>
-                </div>
-              </div>
-
-              {/* Custom Instructions */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-300 mb-2">
-                  Custom Instructions (Optional)
-                </label>
-                <textarea
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                  placeholder="e.g., Focus on RSI and MACD, avoid Bollinger Bands, use tight stop losses..."
-                  className="w-full bg-gray-900 text-white border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-purple-500 h-24 resize-none"
-                />
-                <p className="text-xs text-gray-500 mt-2">
-                  💡 The AI will create a complete strategy based on your preferences
-                </p>
-              </div>
-
-              {/* Info Box */}
-              <div className="bg-purple-900/20 border border-purple-500/30 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <span className="text-2xl">✨</span>
-                  <div className="text-sm text-gray-300">
-                    <div className="font-semibold mb-1">What AI will generate:</div>
-                    <ul className="list-disc list-inside space-y-1 text-gray-400">
-                      <li>Complete LONG & SHORT entry conditions</li>
-                      <li>Optimized TP/SL and risk management</li>
-                      <li>Strategy name and description</li>
-                      <li>All parameters configured</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div className="p-4 border-t border-gray-700 flex gap-3">
-              <button
-                onClick={handleAIGenerate}
-                disabled={isGenerating}
-                className={`flex-1 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold py-3 rounded-lg transition-all flex items-center justify-center gap-2 ${
-                  isGenerating ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
-              >
-                {isGenerating ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Generating...
-                  </>
-                ) : (
-                  <>
-                    <span className="text-lg">🤖</span>
-                    Generate Strategy
-                  </>
-                )}
-              </button>
-              <button
-                onClick={() => setShowAIModal(false)}
-                disabled={isGenerating}
-                className="px-6 bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Condition Modal */}
-      {showAddCondition && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg shadow-2xl max-w-md w-full mx-4 border border-gray-700">
-            <div className="p-4 border-b border-gray-700">
-              <h3 className="text-lg font-semibold text-white">
-                Add {showAddCondition === 'long' ? 'LONG' : 'SHORT'} Condition
-              </h3>
-            </div>
-            
-            <div className="p-4 space-y-4">
-              {/* Indicator Selection */}
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Indicator</label>
-                <select
-                  value={newConditionIndicator}
-                  onChange={(e) => {
-                    const indicator = e.target.value as IndicatorKey;
-                    setNewConditionIndicator(indicator);
-                    const indicatorInfo = INDICATORS.find(i => i.value === indicator);
-                    if (indicatorInfo?.type === 'boolean') {
-                      setNewConditionType('boolean');
-                    }
-                  }}
-                  className="w-full bg-gray-900 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-                >
-                  {INDICATORS.map(ind => (
-                    <option key={ind.value} value={ind.value}>
-                      {ind.label} {ind.type === 'boolean' ? '(Yes/No)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              
-              {/* Condition Type */}
-              {(() => {
-                const indicatorInfo = INDICATORS.find(i => i.value === newConditionIndicator);
-                
-                if (indicatorInfo?.type === 'boolean') {
-                  return (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">Value</label>
-                      <select
-                        value={newConditionBoolValue ? 'true' : 'false'}
-                        onChange={(e) => setNewConditionBoolValue(e.target.value === 'true')}
-                        className="w-full bg-gray-900 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-                      >
-                        <option value="true">True (Yes)</option>
-                        <option value="false">False (No)</option>
-                      </select>
-                    </div>
-                  );
-                } else {
-                  return (
-                    <>
-                      <div>
-                        <label className="block text-sm text-gray-400 mb-2">Operator</label>
-                        <select
-                          value={newConditionOperator}
-                          onChange={(e) => setNewConditionOperator(e.target.value as ComparisonOperator)}
-                          className="w-full bg-gray-900 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-                        >
-                          {COMPARISON_OPERATORS.map(op => (
-                            <option key={op.value} value={op.value}>{op.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                      
-                      <div>
-                        <label className="block text-sm text-gray-400 mb-2">Value</label>
-                        <input
-                          type="number"
-                          value={newConditionValue}
-                          onChange={(e) => setNewConditionValue(parseFloat(e.target.value))}
-                          step="0.1"
-                          className="w-full bg-gray-900 text-white border border-gray-700 rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-                    </>
-                  );
-                }
-              })()}
-            </div>
-            
-            <div className="p-4 border-t border-gray-700 flex gap-3">
-              <button
-                onClick={() => addCondition(showAddCondition)}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded transition-colors"
-              >
-                Add
-              </button>
-              <button
-                onClick={() => setShowAddCondition(null)}
-                className="px-6 bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 rounded transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
-

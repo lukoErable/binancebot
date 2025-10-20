@@ -15,8 +15,8 @@ export class CompletedTradeRepository {
           strategy_name, strategy_type, position_type,
           entry_price, entry_time, entry_reason,
           exit_price, exit_time, exit_reason,
-          quantity, pnl, pnl_percent, fees, duration, is_win
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING id
       `;
 
@@ -35,7 +35,8 @@ export class CompletedTradeRepository {
         trade.pnlPercent,
         trade.fees,
         trade.duration,
-        trade.isWin
+        trade.isWin,
+        trade.timeframe || '1m'
       ];
 
       const result = await pool.query(query, values);
@@ -58,17 +59,32 @@ export class CompletedTradeRepository {
    */
   static async getCompletedTradesByStrategy(
     strategyName: string,
-    limit: number = 100
+    limit: number = 100,
+    timeframe?: string
   ): Promise<CompletedTrade[]> {
     try {
-      const query = `
-        SELECT * FROM completed_trades
-        WHERE strategy_name = $1
-        ORDER BY exit_time DESC
-        LIMIT $2
-      `;
+      let query: string;
+      let values: any[];
       
-      const result = await pool.query(query, [strategyName, limit]);
+      if (timeframe) {
+        query = `
+          SELECT * FROM completed_trades
+          WHERE strategy_name = $1 AND timeframe = $2
+          ORDER BY exit_time DESC
+          LIMIT $3
+        `;
+        values = [strategyName, timeframe, limit];
+      } else {
+        query = `
+          SELECT * FROM completed_trades
+          WHERE strategy_name = $1
+          ORDER BY exit_time DESC
+          LIMIT $2
+        `;
+        values = [strategyName, limit];
+      }
+      
+      const result = await pool.query(query, values);
       
       return result.rows.map((row: any) => ({
         id: row.id,
@@ -86,7 +102,8 @@ export class CompletedTradeRepository {
         pnlPercent: parseFloat(row.pnl_percent),
         fees: parseFloat(row.fees),
         duration: parseInt(row.duration),
-        isWin: row.is_win
+        isWin: row.is_win,
+        timeframe: row.timeframe || '1m'
       }));
     } catch (error) {
       console.error('❌ Error fetching completed trades:', error);
@@ -123,7 +140,8 @@ export class CompletedTradeRepository {
         pnlPercent: parseFloat(row.pnl_percent),
         fees: parseFloat(row.fees),
         duration: parseInt(row.duration),
-        isWin: row.is_win
+        isWin: row.is_win,
+        timeframe: row.timeframe || '1m'
       }));
     } catch (error) {
       console.error('❌ Error fetching all completed trades:', error);

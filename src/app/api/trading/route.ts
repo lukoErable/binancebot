@@ -1,7 +1,7 @@
-import { BinanceWebSocketManager } from '@/lib/websocket-manager';
+import { MultiTimeframeWebSocketManager } from '@/lib/multi-websocket-manager';
 import { NextRequest } from 'next/server';
 
-let wsManager: BinanceWebSocketManager | null = null;
+let multiWsManager: MultiTimeframeWebSocketManager | null = null;
 
 export async function GET(request: NextRequest) {
   // Check if client wants SSE (Server-Sent Events)
@@ -12,20 +12,20 @@ export async function GET(request: NextRequest) {
 
   if (action === 'start') {
     // Stop existing connection if any
-    if (wsManager) {
-      console.log('🔄 Stopping existing connection before starting new one...');
-      wsManager.disconnect();
-      wsManager = null;
+    if (multiWsManager) {
+      console.log('🔄 Stopping existing connections before starting new ones...');
+      multiWsManager.disconnect();
+      multiWsManager = null;
       // Wait a bit for cleanup
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    // Start the WebSocket connection
+    // Start the Multi-WebSocket connection
     const encoder = new TextEncoder();
     let isClosed = false;
     const stream = new ReadableStream({
-      start(controller) {
-        wsManager = new BinanceWebSocketManager((state) => {
+      async start(controller) {
+        multiWsManager = new MultiTimeframeWebSocketManager((state) => {
           // Send state updates to client via SSE only if stream is open
           if (!isClosed) {
             try {
@@ -36,10 +36,13 @@ export async function GET(request: NextRequest) {
               isClosed = true;
             }
           }
-        }, timeframe, trading);
+        }, trading);
 
-        wsManager.connect().catch((error) => {
-          console.error('Failed to connect:', error);
+        try {
+          await multiWsManager.initialize(timeframe);
+          console.log(`✅ Multi-WebSocket system initialized with primary: ${timeframe}`);
+        } catch (error: any) {
+          console.error('Failed to initialize multi-WS:', error);
           if (!isClosed) {
             try {
               const errorData = `data: ${JSON.stringify({ error: error.message })}\n\n`;
@@ -48,13 +51,13 @@ export async function GET(request: NextRequest) {
               isClosed = true;
             }
           }
-        });
+        }
       },
       cancel() {
         isClosed = true;
-        if (wsManager) {
-          wsManager.disconnect();
-          wsManager = null;
+        if (multiWsManager) {
+          multiWsManager.disconnect();
+          multiWsManager = null;
         }
       }
     });
@@ -69,19 +72,19 @@ export async function GET(request: NextRequest) {
   }
 
   if (action === 'stop') {
-    if (wsManager) {
-      wsManager.disconnect();
-      wsManager = null;
-      return Response.json({ success: true, message: 'WebSocket stopped' });
+    if (multiWsManager) {
+      multiWsManager.disconnect();
+      multiWsManager = null;
+      return Response.json({ success: true, message: 'All WebSockets stopped' });
     }
     return Response.json({ success: false, message: 'No active connection' });
   }
 
   if (action === 'changeTimeframe') {
-    if (wsManager) {
+    if (multiWsManager) {
       try {
-        await wsManager.changeTimeframe(timeframe);
-        return Response.json({ success: true, message: `Timeframe changed to ${timeframe}` });
+        await multiWsManager.changePrimaryTimeframe(timeframe);
+        return Response.json({ success: true, message: `Primary timeframe changed to ${timeframe}` });
       } catch (error) {
         return Response.json({ success: false, error: 'Failed to change timeframe' }, { status: 500 });
       }
@@ -90,10 +93,10 @@ export async function GET(request: NextRequest) {
   }
 
   if (action === 'toggleTrading') {
-    if (wsManager) {
+    if (multiWsManager) {
       try {
-        wsManager.setTradingMode(trading);
-        return Response.json({ success: true, message: `Trading mode set to ${trading}` });
+        multiWsManager.setTradingMode(trading);
+        return Response.json({ success: true, message: `Trading mode set to ${trading} for all timeframes` });
       } catch (error) {
         return Response.json({ success: false, error: 'Failed to toggle trading mode' }, { status: 500 });
       }
@@ -102,8 +105,8 @@ export async function GET(request: NextRequest) {
   }
 
   if (action === 'getStrategies') {
-    if (wsManager) {
-      const performances = wsManager.getStrategyPerformances();
+    if (multiWsManager) {
+      const performances = multiWsManager.getStrategyPerformances();
       return Response.json({ success: true, strategies: performances });
     }
     return Response.json({ success: false, message: 'No active connection' }, { status: 400 });
@@ -111,17 +114,19 @@ export async function GET(request: NextRequest) {
 
   if (action === 'toggleStrategy') {
     const strategyName = searchParams.get('strategyName');
-    if (wsManager && strategyName) {
-      const newState = wsManager.toggleStrategy(strategyName);
+    const timeframeParam = searchParams.get('timeframe');
+    if (multiWsManager && strategyName) {
+      const newState = await multiWsManager.toggleStrategy(strategyName, timeframeParam || undefined);
       return Response.json({ success: true, isActive: newState });
     }
     return Response.json({ success: false, message: 'No active connection or missing strategy name' }, { status: 400 });
   }
 
   if (action === 'status') {
-    if (wsManager) {
-      const state = wsManager.getState();
-      return Response.json({ connected: true, state });
+    if (multiWsManager) {
+      const state = multiWsManager.getState();
+      const activeTimeframes = multiWsManager.getActiveTimeframes();
+      return Response.json({ connected: true, state, activeTimeframes });
     }
     return Response.json({ connected: false });
   }
@@ -132,28 +137,29 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, strategyName } = body;
+    const { action, strategyName, timeframe } = body;
 
     if (action === 'resetStrategy') {
       if (!strategyName) {
         return Response.json({ error: 'Strategy name is required' }, { status: 400 });
       }
 
-      if (!wsManager) {
+      if (!multiWsManager) {
         return Response.json({ error: 'WebSocket manager not initialized' }, { status: 400 });
       }
 
-      console.log(`🔄 Resetting strategy: ${strategyName}`);
-      const success = await wsManager.resetStrategy(strategyName);
+      const tf = timeframe || '1m'; // Default to 1m if not specified
+      console.log(`🔄 Resetting strategy: ${strategyName} [${tf}]`);
+      const success = await multiWsManager.resetStrategy(strategyName, tf);
 
       if (success) {
         return Response.json({ 
           success: true, 
-          message: `Strategy "${strategyName}" has been reset successfully` 
+          message: `Strategy "${strategyName}" [${tf}] has been reset successfully` 
         });
       } else {
         return Response.json({ 
-          error: `Failed to reset strategy "${strategyName}"` 
+          error: `Failed to reset strategy "${strategyName}" [${tf}]` 
         }, { status: 500 });
       }
     }

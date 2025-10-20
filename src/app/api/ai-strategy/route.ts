@@ -84,9 +84,9 @@ Available Indicators:
 Available Colors (pick ONE unique - EXACT name only): emerald, rose, indigo, violet, amber, lime, sky, fuchsia, pink, red, green, slate, stone
 
 Format (copy exactly - ADD fields: "color", "longNotes", "shortNotes", "strategyLogic"):
-{"name":"Strategy Name","description":"Brief desc","color":"emerald","longNotes":"🟢 Conditions d'ACHAT (LONG): ...","shortNotes":"🔴 Conditions de VENTE (SHORT): ...","strategyLogic":"💡 Logique: ...","longEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"LT","value":30},{"type":"boolean","indicator":"isBullishTrend","value":true}]},"shortEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"GT","value":70},{"type":"boolean","indicator":"isBearishTrend","value":true}]},"longExitConditions":{"operator":"OR","conditions":[{"type":"boolean","indicator":"isBearishTrend","value":true}]},"shortExitConditions":{"operator":"OR","conditions":[{"type":"boolean","indicator":"isBullishTrend","value":true}]},"profitTargetPercent":2.5,"stopLossPercent":1.5,"maxPositionTime":60,"positionSize":0.05,"cooldownPeriod":5}
+{"name":"Strategy Name","description":"Brief desc","color":"emerald","longNotes":"🟢 Conditions d'ACHAT (LONG): ...","shortNotes":"🔴 Conditions de VENTE (SHORT): ...","strategyLogic":"💡 Logique: ...","longEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"LT","value":30},{"type":"comparison","indicator":"price","operator":"GT","value":"ema50"},{"type":"boolean","indicator":"isBullishTrend","value":true}]},"shortEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"GT","value":70},{"type":"comparison","indicator":"price","operator":"LT","value":"ema50"},{"type":"boolean","indicator":"isBearishTrend","value":true}]},"longExitConditions":{"operator":"OR","conditions":[{"type":"comparison","indicator":"price","operator":"LT","value":"ema50"},{"type":"boolean","indicator":"isBearishTrend","value":true}]},"shortExitConditions":{"operator":"OR","conditions":[{"type":"comparison","indicator":"price","operator":"GT","value":"ema50"},{"type":"boolean","indicator":"isBullishTrend","value":true}]},"profitTargetPercent":2.5,"stopLossPercent":1.5,"maxPositionTime":60,"positionSize":0.05,"cooldownPeriod":5}
 
-Rules: BOTH long+short required, 2-4 conditions per entry, NO spaces, value=number for comparison, value=true/false for boolean, choose diverse indicators, MUST include fields: "color", "longNotes", "shortNotes", "strategyLogic"
+Rules: BOTH long+short required, 2-4 conditions per entry, NO spaces, value can be NUMBER (30, 70) OR INDICATOR NAME as STRING ("ema50", "macd", "price") for comparison, value=true/false for boolean, choose diverse indicators, MUST include fields: "color", "longNotes", "shortNotes", "strategyLogic". Use indicator comparisons (e.g. price vs ema50, rsi vs 50) for more dynamic strategies.
 `;
 
 export async function POST(request: Request) {
@@ -258,9 +258,10 @@ export async function POST(request: Request) {
       };
     }
 
-    // Add strategyType and simulationMode
+    // Add strategyType, simulationMode, and timeframe
     strategy.strategyType = 'CUSTOM';
     strategy.simulationMode = true;
+    strategy.timeframe = '1m'; // Default timeframe for AI-generated strategies
     
     // Force presence of user-friendly notes
     strategy.longNotes = strategy.longNotes || '🟢 Conditions d\'ACHAT (LONG): ...';
