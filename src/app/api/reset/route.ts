@@ -24,6 +24,20 @@ export async function POST(request: NextRequest) {
       await pool.query('DELETE FROM open_positions WHERE strategy_name = $1', [strategyName]);
       const result = await pool.query('DELETE FROM completed_trades WHERE strategy_name = $1', [strategyName]);
       
+      // Clear caches and reload StrategyManager
+      const CustomStrategyRepository = (await import('@/lib/db/custom-strategy-repository')).default;
+      const StrategyRepository = (await import('@/lib/db/strategy-repository')).default;
+      CustomStrategyRepository.clearCache();
+      StrategyRepository.clearCache();
+      
+      const { StrategyManager } = await import('@/lib/strategy-manager');
+      const strategyManager = StrategyManager.getGlobalInstance();
+      if (strategyManager) {
+        await strategyManager.reloadAllData();
+      }
+      
+      console.log(`✅ Reset "${strategyName}" and reloaded data`);
+      
       return NextResponse.json({
         success: true,
         message: `Strategy "${strategyName}" reset successfully`,
@@ -42,7 +56,21 @@ export async function POST(request: NextRequest) {
       await pool.query('DELETE FROM completed_trades WHERE timeframe = $1', [timeframe]);
       await pool.query('UPDATE strategies SET is_active = false, activated_at = NULL, total_active_time = 0 WHERE timeframe = $1', [timeframe]);
       
+      // Clear caches to force reload
+      const CustomStrategyRepository = (await import('@/lib/db/custom-strategy-repository')).default;
+      const StrategyRepository = (await import('@/lib/db/strategy-repository')).default;
+      CustomStrategyRepository.clearCache();
+      StrategyRepository.clearCache();
+      
+      // Reload StrategyManager data
+      const { StrategyManager } = await import('@/lib/strategy-manager');
+      const strategyManager = StrategyManager.getGlobalInstance();
+      if (strategyManager) {
+        await strategyManager.reloadAllData();
+      }
+      
       console.log(`✅ Deleted ${count} completed trades for ${timeframe}`);
+      console.log(`🔄 Caches cleared and StrategyManager reloaded`);
       
       return NextResponse.json({
         success: true,
@@ -58,13 +86,25 @@ export async function POST(request: NextRequest) {
       const beforeCount = await pool.query('SELECT COUNT(*) as count FROM completed_trades');
       const count = parseInt(beforeCount.rows[0].count);
       
-      // Delete all strategy-derived data (open positions, completed trades, performances)
+      // Delete all strategy-derived data (open positions, completed trades)
       await pool.query('DELETE FROM open_positions');
       await pool.query('DELETE FROM completed_trades');
-      await pool.query('DELETE FROM strategy_performances');
       await pool.query('UPDATE strategies SET is_active = false, activated_at = NULL, total_active_time = 0');
       
+      // Clear caches and reload StrategyManager
+      const CustomStrategyRepository = (await import('@/lib/db/custom-strategy-repository')).default;
+      const StrategyRepository = (await import('@/lib/db/strategy-repository')).default;
+      CustomStrategyRepository.clearCache();
+      StrategyRepository.clearCache();
+      
+      const { StrategyManager } = await import('@/lib/strategy-manager');
+      const strategyManager = StrategyManager.getGlobalInstance();
+      if (strategyManager) {
+        await strategyManager.reloadAllData();
+      }
+      
       console.log(`✅ Deleted ${count} completed trades`);
+      console.log(`🔄 Caches cleared and StrategyManager reloaded`);
       
       return NextResponse.json({
         success: true,

@@ -25,6 +25,27 @@ export async function GET(request: NextRequest) {
     let isClosed = false;
     const stream = new ReadableStream({
       async start(controller) {
+        // Send initial "loading" message immediately to hide skeleton
+        try {
+          const initialMessage = {
+            isConnected: true,
+            isLoading: true,
+            timeframe: timeframe,
+            currentPrice: 0,
+            candles: [],
+            strategyPerformances: [],
+            rsi: 0,
+            ema12: 0,
+            ema26: 0,
+            ema50: 0,
+            ema200: 0,
+            lastUpdate: Date.now()
+          };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(initialMessage)}\n\n`));
+        } catch (error) {
+          console.error('Failed to send initial message:', error);
+        }
+        
         multiWsManager = new MultiTimeframeWebSocketManager((state) => {
           // Send state updates to client via SSE only if stream is open
           if (!isClosed) {

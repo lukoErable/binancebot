@@ -463,6 +463,7 @@ export class CustomStrategy {
   
   /**
    * Restore from database (completed trades and open positions)
+   * DEPRECATED: Use restoreFromDatabaseWithTrades for better performance
    */
   async restoreFromDatabase(): Promise<void> {
     console.log(`📥 [${this.config.name}] Restoring from database...`);
@@ -473,18 +474,18 @@ export class CustomStrategy {
     this.totalPnL = 0;
     this.completedTrades = [];
     
-    // Restore open position
+    // Restore open position for this specific timeframe
     const openPosition = await OpenPositionRepository.getOpenPosition(this.config.name, this.config.timeframe);
     if (openPosition && openPosition.type !== 'NONE') {
       this.currentPosition = openPosition;
       console.log(`   Restored open ${openPosition.type} position @ ${openPosition.entryPrice.toFixed(2)} [${this.config.timeframe}]`);
     }
     
-    // Load completed trades (filtered by timeframe)
+    // Load ALL completed trades for this strategy (ALL timeframes) - NO LIMIT for true all-time stats
     const completedTrades = await CompletedTradeRepository.getCompletedTradesByStrategy(
       this.config.name, 
-      100, 
-      this.config.timeframe
+      0, // 0 = no limit, load ALL trades
+      undefined // undefined = load ALL timeframes
     );
     this.completedTrades = completedTrades;
     
@@ -492,7 +493,35 @@ export class CustomStrategy {
     this.winningTrades = completedTrades.filter(t => t.isWin).length;
     this.totalPnL = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
     
-    console.log(`✅ [${this.config.name}] Restored: ${this.totalTrades} trades, Win Rate: ${this.getWinRate().toFixed(1)}%, P&L: ${this.totalPnL.toFixed(2)} USDT`);
+    console.log(`✅ [${this.config.name}] Restored: ${this.totalTrades} trades (all timeframes), Win Rate: ${this.getWinRate().toFixed(1)}%, P&L: ${this.totalPnL.toFixed(2)} USDT`);
+  }
+  
+  /**
+   * Restore from database with pre-loaded trades (OPTIMIZED)
+   * Trades and positions are loaded in bulk by StrategyManager to avoid multiple queries
+   * @param preloadedTrades - All trades for this strategy (all timeframes)
+   * @param preloadedPosition - Open position for this strategy+timeframe (optional)
+   */
+  async restoreFromDatabaseWithTrades(preloadedTrades: any[], preloadedPosition?: any): Promise<void> {
+    // Reset
+    this.totalTrades = 0;
+    this.winningTrades = 0;
+    this.totalPnL = 0;
+    this.completedTrades = [];
+    
+    // Restore open position (use pre-loaded if available)
+    if (preloadedPosition && preloadedPosition.type !== 'NONE') {
+      this.currentPosition = preloadedPosition;
+      console.log(`📥 [${this.config.name}][${this.config.timeframe}] Position: ${preloadedPosition.type} @ ${preloadedPosition.entryPrice.toFixed(2)}`);
+    }
+    
+    // Use pre-loaded trades (already filtered by strategy name, all timeframes)
+    this.completedTrades = preloadedTrades;
+    this.totalTrades = preloadedTrades.length;
+    this.winningTrades = preloadedTrades.filter(t => t.isWin).length;
+    this.totalPnL = preloadedTrades.reduce((sum, t) => sum + t.pnl, 0);
+    
+    console.log(`✅ [${this.config.name}][${this.config.timeframe}] ${this.totalTrades} trades, WR: ${this.getWinRate().toFixed(1)}%, P&L: ${this.totalPnL.toFixed(2)} USDT`);
   }
   
   /**

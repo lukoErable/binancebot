@@ -25,11 +25,14 @@ export class MultiTimeframeWebSocketManager {
     
     console.log('🚀 MultiTimeframeWebSocketManager initializing...');
     
-    // Get all active strategies grouped by timeframe
+    // Wait a bit for StrategyManager to load (simple timeout)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     const strategyManager = getGlobalStrategyManager();
     if (!strategyManager) {
       console.log('⚠️  No strategy manager found, starting primary timeframe only');
       await this.startWebSocket(primaryTimeframe);
+      this.startPeriodicUpdates();
       return;
     }
 
@@ -129,6 +132,13 @@ export class MultiTimeframeWebSocketManager {
   }
 
   /**
+   * Force an immediate SSE update (e.g., after creating a new strategy)
+   */
+  forceUpdate(): void {
+    this.sendCombinedState();
+  }
+
+  /**
    * Change the primary timeframe (for UI)
    */
   async changePrimaryTimeframe(newTimeframe: string): Promise<void> {
@@ -181,7 +191,7 @@ export class MultiTimeframeWebSocketManager {
   }
 
   /**
-   * Toggle a strategy on ALL timeframes (global toggle with shared timer)
+   * Toggle a strategy on a SPECIFIC timeframe (independent per timeframe)
    */
   async toggleStrategy(strategyName: string, timeframe?: string): Promise<boolean> {
     const strategyManager = getGlobalStrategyManager();
@@ -199,42 +209,14 @@ export class MultiTimeframeWebSocketManager {
       return false;
     }
 
-    // Toggle first instance to determine new state
+    // Determine target timeframe
     const firstInstance = strategyInstances[0];
     const targetTimeframe = timeframe || firstInstance.timeframe;
-    const newState = strategyManager.toggleStrategy(strategyName, targetTimeframe);
     
-    console.log(`🔄 Toggling "${strategyName}" to ${newState ? 'ACTIVE' : 'INACTIVE'} on all timeframes...`);
+    // Toggle ONLY the specified timeframe (independent)
+    const newState = await strategyManager.toggleStrategy(strategyName, targetTimeframe);
     
-    // Get the global state after first toggle
-    const { default: GlobalStrategyRepository } = await import('./db/global-strategy-repository');
-    const globalState = await GlobalStrategyRepository.getGlobalState(strategyName);
-    
-    // Apply same state to all other timeframes
-    for (const instance of strategyInstances) {
-      if (instance.timeframe !== targetTimeframe) {
-        const currentState = instance.isActive;
-        if (currentState !== newState) {
-          await strategyManager.toggleStrategy(strategyName, instance.timeframe);
-          console.log(`  └─ ${instance.timeframe}: ${currentState ? 'ACTIVE' : 'INACTIVE'} → ${newState ? 'ACTIVE' : 'INACTIVE'}`);
-        }
-      }
-    }
-    
-    // Sync global timer across all instances
-    if (globalState) {
-      await strategyManager.syncGlobalTimer(
-        strategyName, 
-        globalState.activatedAt, 
-        globalState.totalActiveTime
-      );
-    }
-    
-    // Sync WebSockets after global toggle
-    await this.syncWebSocketsWithStrategies();
-    
-    console.log(`✅ Strategy "${strategyName}" is now ${newState ? 'ACTIVE' : 'INACTIVE'} on ${strategyInstances.length} timeframe(s)`);
-    console.log(`⏱️  Global timer: ${globalState ? Math.floor(globalState.totalActiveTime / 60) : 0}m`);
+    console.log(`✅ Strategy "${strategyName}" [${targetTimeframe}] is now ${newState ? 'ACTIVE' : 'INACTIVE'} (independent)`);
     
     return newState;
   }

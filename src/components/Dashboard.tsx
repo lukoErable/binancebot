@@ -2,13 +2,12 @@
 
 import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { StrategyPerformance, StrategyState } from '@/types/trading';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { HiChevronDown, HiClock } from 'react-icons/hi';
 import BinanceChart from './BinanceChart';
 import {
   ChartSkeleton,
   CriteriaSkeleton,
-  FullPageSkeleton,
   IndicatorSkeleton,
   OHLCSkeleton,
   SignalSkeleton,
@@ -28,7 +27,8 @@ declare global {
 }
 
 export default function Dashboard() {
-  const [state, setState] = useState<StrategyState | null>(null);
+  // Cache states for each timeframe
+  const [timeframeStates, setTimeframeStates] = useState<Record<string, StrategyState>>({});
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [selectedTimeframe, setSelectedTimeframe] = useState('1m');
@@ -44,6 +44,9 @@ export default function Dashboard() {
   const [comparisonStrategyName, setComparisonStrategyName] = useState<string | null>(null);
   const [allTimeframePerformances, setAllTimeframePerformances] = useState<StrategyPerformance[]>([]);
   const [showAllPositions, setShowAllPositions] = useState(false);
+  
+  // Get current state from cache
+  const state = timeframeStates[selectedTimeframe] || null;
 
   // Detect when stats bar becomes sticky using IntersectionObserver
   useEffect(() => {
@@ -70,13 +73,52 @@ export default function Dashboard() {
     const tm = trading !== undefined ? trading : false; // Always start in monitoring mode
     
     setIsConnecting(true);
+    
+    // Add timeout to prevent infinite loading
+    const connectionTimeout = setTimeout(() => {
+      console.warn('⚠️  SSE connection timeout - stopping skeleton');
+      setIsConnecting(false);
+    }, 15000); // 15 seconds max wait for first message
+    
     try {
       const eventSource = new EventSource(`/api/trading?action=start&timeframe=${tf}&trading=${tm}`);
 
       eventSource.onmessage = (event) => {
         try {
           const data: StrategyState = JSON.parse(event.data);
-          setState(data);
+          
+          // Clear timeout on first message
+          clearTimeout(connectionTimeout);
+          
+          // Update cache for ALL timeframes based on strategy performances
+          setTimeframeStates(prev => {
+            const newStates = { ...prev };
+            
+            // Group performances by timeframe
+            if (data.strategyPerformances) {
+              const timeframeGroups = data.strategyPerformances.reduce((acc, perf) => {
+                const tf = perf.timeframe || '1m';
+                if (!acc[tf]) acc[tf] = [];
+                acc[tf].push(perf);
+                return acc;
+              }, {} as Record<string, StrategyPerformance[]>);
+              
+              // Create/update state for each timeframe
+              Object.entries(timeframeGroups).forEach(([tf, perfs]) => {
+                newStates[tf] = {
+                  ...data,
+                  timeframe: tf,
+                  strategyPerformances: perfs
+                };
+              });
+            }
+            
+            // Also update the primary timeframe state with full data
+            newStates[data.timeframe] = data;
+            
+            return newStates;
+          });
+          
           setIsConnected(data.isConnected);
           setIsConnecting(false);
           setIsChangingTimeframe(false); // Désactiver le loading quand les nouvelles données arrivent
@@ -87,6 +129,7 @@ export default function Dashboard() {
 
       eventSource.onerror = (error) => {
         console.error('SSE Error:', error);
+        clearTimeout(connectionTimeout);
         setIsConnected(false);
         setIsConnecting(false);
         setIsChangingTimeframe(false);
@@ -97,12 +140,13 @@ export default function Dashboard() {
       window.tradingEventSource = eventSource;
     } catch (error) {
       console.error('Error starting data stream:', error);
+      clearTimeout(connectionTimeout);
       setIsConnecting(false);
     }
   };
 
 
-  const stopDataStream = async () => {
+  const stopDataStream = async (keepData: boolean = false) => {
     try {
       // Close SSE connection
       if (window.tradingEventSource) {
@@ -112,7 +156,11 @@ export default function Dashboard() {
 
       await fetch('/api/trading?action=stop');
       setIsConnected(false);
-      setState(null);
+      
+      // Only clear data if not restarting (for smooth transition when adding new strategies)
+      if (!keepData) {
+        setTimeframeStates({});
+      }
     } catch (error) {
       console.error('Error stopping data stream:', error);
     }
@@ -158,8 +206,10 @@ export default function Dashboard() {
       if (response.ok) {
         console.log(`✅ Strategy "${config.name}" created on ${allTimeframes.length} timeframes!`);
         setShowStrategyBuilder(false);
-        // Reload to see the new strategy
-        window.location.reload();
+        
+        // Strategy is created and StrategyManager reloaded in backend
+        // The next SSE update will include the new strategy automatically
+        console.log('✅ New strategy created! Will appear in next SSE update (no reload needed)');
       } else {
         console.error(`❌ Error: ${data.error || 'Failed to create strategy'}`);
       }
@@ -248,8 +298,10 @@ export default function Dashboard() {
         console.log(`✨ AI Strategy "${generatedStrategy.name}" created on all timeframes!`);
         console.log(`📊 Type: ${randomType.toUpperCase()}`);
         console.log(`💡 ${generatedStrategy.description}`);
-        // Reload to see the new strategy
-        window.location.reload();
+        
+        // Strategy is created and StrategyManager reloaded in backend
+        // The next SSE update will include the new strategy automatically
+        console.log('✅ New AI strategy created! Will appear in next SSE update (no reload needed)');
       } else {
         console.error(`❌ Error saving: ${saveData.error || 'Failed to save strategy'}`);
       }
@@ -263,29 +315,27 @@ export default function Dashboard() {
   const changeTimeframe = async (timeframe: string) => {
     if (timeframe === selectedTimeframe) return; // Éviter les changements inutiles
     
-    // Activer le loading
-    setIsChangingTimeframe(true);
+    // Changement instantané - pas de loading si on a déjà les données en cache
+    const hasCachedData = timeframeStates[timeframe] !== undefined;
     
-    // Mise à jour instantanée de l'UI
-    setSelectedTimeframe(timeframe);
-    
-    // Mettre à jour le state local immédiatement pour éviter le flash
-    if (state) {
-      setState({
-        ...state,
-        timeframe: timeframe
-      });
+    if (!hasCachedData) {
+      setIsChangingTimeframe(true);
     }
     
-    // Changement en arrière-plan : juste envoyer un message au serveur pour changer le timeframe
+    // Mise à jour instantanée de l'UI avec les données en cache
+    setSelectedTimeframe(timeframe);
+    
+    // Informer le backend en arrière-plan (ne pas attendre)
     if (isConnected) {
-      try {
-        await fetch(`/api/trading?action=changeTimeframe&timeframe=${timeframe}`);
-        // Le loading sera désactivé quand les nouvelles données arriveront via SSE
-      } catch (error) {
-        console.error('Error changing timeframe:', error);
-        setIsChangingTimeframe(false);
-      }
+      fetch(`/api/trading?action=changeTimeframe&timeframe=${timeframe}`)
+        .then(() => {
+          // Les nouvelles données arriveront via SSE et mettront à jour le cache
+          setIsChangingTimeframe(false);
+        })
+        .catch(error => {
+          console.error('Error changing timeframe:', error);
+          setIsChangingTimeframe(false);
+        });
     } else {
       setIsChangingTimeframe(false);
     }
@@ -325,32 +375,35 @@ export default function Dashboard() {
     return new Date(timestamp).toLocaleTimeString('fr-FR');
   };
 
-  // Filter strategies by selected timeframe AND filter their trades to match timeframe
-  const filteredStrategyPerformances = strategyPerformances
-    .filter(p => p.timeframe === selectedTimeframe)
-    .map(perf => {
-      // Filter completedTrades to only include trades from this specific timeframe
-      const filteredTrades = perf.completedTrades?.filter(trade => trade.timeframe === perf.timeframe) || [];
-      
-      // Recalculate all stats based on filtered trades only
-      const totalTrades = filteredTrades.length;
-      const winningTrades = filteredTrades.filter(t => t.isWin).length;
-      const totalPnL = filteredTrades.reduce((sum, t) => sum + t.pnl, 0);
-      const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
-      
-      // Calculate current capital based on filtered trades
-      const currentCapital = 100000 + totalPnL;
-      
-      return {
-        ...perf,
-        completedTrades: filteredTrades,
-        totalTrades,
-        winningTrades,
-        totalPnL,
-        winRate,
-        currentCapital
-      };
-    });
+  // Filter strategies by selected timeframe
+  // EVERYTHING (stats + trades + positions) = CURRENT timeframe ONLY
+  // Memoized for performance optimization
+  const filteredStrategyPerformances = useMemo(() => {
+    return strategyPerformances
+      .filter(p => p.timeframe === selectedTimeframe)
+      .map(perf => {
+        // Filter trades to show only those from the CURRENT timeframe
+        const tradesForCurrentTimeframe = (perf.completedTrades || [])
+          .filter(t => t.timeframe === selectedTimeframe);
+        
+        // Calculate stats based ONLY on current timeframe trades
+        const totalTrades = tradesForCurrentTimeframe.length;
+        const winningTrades = tradesForCurrentTimeframe.filter(t => t.isWin).length;
+        const totalPnL = tradesForCurrentTimeframe.reduce((sum, t) => sum + t.pnl, 0);
+        const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+        const currentCapital = 100000 + totalPnL;
+        
+        return {
+          ...perf,
+          completedTrades: tradesForCurrentTimeframe, // Only current timeframe
+          totalTrades,
+          winningTrades,
+          totalPnL,
+          winRate,
+          currentCapital
+        };
+      });
+  }, [strategyPerformances, selectedTimeframe]);
 
   const getSignalColor = (type: 'BUY' | 'SELL' | 'HOLD' | 'CLOSE_LONG' | 'CLOSE_SHORT') => {
     switch (type) {
@@ -840,16 +893,39 @@ export default function Dashboard() {
         };
         
         // Extract and evaluate indicators from conditions
-        const processConditions = (conditions: any, targetMap: Record<string, { value: boolean; status: string }>) => {
+        const processConditions = (conditions: any, targetMap: Record<string, { value: boolean; status: string; formula?: string }>) => {
           if (!conditions || !conditions.conditions) return;
           
           conditions.conditions.forEach((cond: any) => {
             if (cond.type === 'comparison' || cond.type === 'boolean' || cond.type === 'range') {
               if (cond.indicator && !targetMap[cond.indicator]) {
                 const result = evaluateCondition(cond);
+                
+                // Generate formula for tooltip
+                let formula = '';
+                if (cond.type === 'comparison') {
+                  const leftValue = (state as any)[cond.indicator];
+                  const rightValue = cond.value !== undefined && cond.value !== null 
+                    ? (typeof cond.value === 'number' ? cond.value : (state as any)[cond.value])
+                    : (cond.indicator2 ? (state as any)[cond.indicator2] : null);
+                  
+                  const operatorSymbol = cond.operator === 'LT' ? '<' : cond.operator === 'GT' ? '>' : cond.operator === 'EQ' ? '=' : cond.operator;
+                  const leftFormatted = typeof leftValue === 'number' ? leftValue.toFixed(2) : leftValue;
+                  const rightFormatted = typeof rightValue === 'number' ? rightValue.toFixed(2) : rightValue;
+                  
+                  formula = `${cond.indicator}: ${leftFormatted} ${operatorSymbol} ${rightFormatted}`;
+                } else if (cond.type === 'boolean') {
+                  const value = (state as any)[cond.indicator];
+                  formula = `${cond.indicator}: ${value ? 'TRUE' : 'FALSE'}`;
+                } else if (cond.type === 'range') {
+                  const value = (state as any)[cond.indicator];
+                  formula = `${cond.indicator}: ${typeof value === 'number' ? value.toFixed(2) : value} in [${cond.min}, ${cond.max}]`;
+                }
+                
                 targetMap[cond.indicator] = {
                   value: result.met,
-                  status: result.met ? 'green' : result.close ? 'orange' : 'gray'
+                  status: result.met ? 'green' : result.close ? 'orange' : 'gray',
+                  formula: formula
                 };
               }
             }
@@ -1156,7 +1232,7 @@ export default function Dashboard() {
     // CUSTOM Strategy - Extract statuses from customIndicators (indicators only, not cooldown/position)
     if (criteria.strategyType === 'CUSTOM') {
       const statuses: string[] = [];
-      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string }> | undefined;
+      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string; formula?: string }> | undefined;
       if (indicators && typeof indicators === 'object') {
         Object.values(indicators).forEach(data => {
           if (data && typeof data === 'object' && 'status' in data) {
@@ -1226,7 +1302,7 @@ export default function Dashboard() {
     // CUSTOM Strategy - Extract statuses from customIndicators (indicators only, not cooldown/position)
     if (criteria.strategyType === 'CUSTOM') {
       const statuses: string[] = [];
-      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string }> | undefined;
+      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string; formula?: string }> | undefined;
       if (indicators && typeof indicators === 'object') {
         Object.values(indicators).forEach(data => {
           if (data && typeof data === 'object' && 'status' in data) {
@@ -1251,7 +1327,7 @@ export default function Dashboard() {
     
     // CUSTOM Strategy - Afficher les indicateurs avec statuts dynamiques
     if (criteria.strategyType === 'CUSTOM') {
-      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string }> | undefined;
+      const indicators = (criteriaData as any)._customIndicatorsData as Record<string, { value: boolean; status: string; formula?: string }> | undefined;
       
       if (!indicators || Object.keys(indicators).length === 0) {
         return (
@@ -1275,11 +1351,21 @@ export default function Dashboard() {
               data.status === 'orange' ? 'text-orange-400' :
               'text-gray-500';
             
+            // Enhanced tooltip with formula and color status
+            const statusEmoji = 
+              data.status === 'green' ? '🟢' :
+              data.status === 'orange' ? '🟠' :
+              '⚪';
+            
+            const tooltipText = data.formula 
+              ? `${statusEmoji} ${name}\n${data.formula}\n${data.value ? '✓ CONDITION MET' : '✗ CONDITION NOT MET'}`
+              : `${name}: ${data.value ? '✓ Met' : '✗ Not met'}`;
+            
             return (
               <span 
                 key={idx}
                 className={`flex items-center gap-1 ${statusColor}`}
-                title={`${name}: ${data.value ? '✓ Met' : '✗ Not met'}`}
+                title={tooltipText}
               >
                 <span className={`w-1 h-1 rounded-full ${getStatusClass(data.status)}`}></span>
                 {name}
@@ -1762,7 +1848,19 @@ export default function Dashboard() {
 
   // Show full page skeleton on initial load
   if (!state && isConnecting) {
-    return <FullPageSkeleton />;
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-green-500 mb-6"></div>
+          <h2 className="text-2xl font-bold text-white mb-2">Loading Trading Dashboard...</h2>
+          <p className="text-gray-400">Initializing strategies and connecting to Binance</p>
+          <div className="mt-4 text-sm text-gray-500">
+            <p>📊 Loading all timeframes (1m, 5m, 15m, 1h, 4h, 1d)</p>
+            <p className="mt-1">⏳ This may take up to 15 seconds...</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Get background style based on selected strategy
@@ -1864,18 +1962,32 @@ export default function Dashboard() {
             {strategyPerformances.length > 0 && (
               <>
                 {selectedStrategy === 'GLOBAL' ? (
-                  <div className="px-4 py-1.5 bg-gray-900 border-2 border-sky-500/50 rounded shadow-lg shadow-sky-500/20">
-                    <span className="text-base font-semibold bg-gradient-to-r from-sky-400 to-cyan-400 bg-clip-text text-transparent">
-                      🌍 {selectedTimeframe} Dashboard
-                    </span>
-                    <span className="ml-2 text-xs text-gray-400">
-                      {filteredStrategyPerformances.length} stratégie{filteredStrategyPerformances.length > 1 ? 's' : ''}
-                    </span>
-                    {strategyPerformances.length > filteredStrategyPerformances.length && (
-                      <span className="ml-2 text-xs text-cyan-400">
-                        (+{strategyPerformances.length - filteredStrategyPerformances.length} autre{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''} TF)
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border-2 border-sky-500/50 rounded shadow-lg shadow-sky-500/20">
+                    {['1m', '5m', '15m', '1h', '4h', '1d'].map((tf) => (
+                      <button
+                        key={tf}
+                        onClick={() => changeTimeframe(tf)}
+                        disabled={isChangingTimeframe}
+                        className={`px-2.5 py-1 text-xs font-medium transition-all rounded ${
+                          selectedTimeframe === tf
+                            ? 'bg-gradient-to-r from-sky-500 to-cyan-500 text-white shadow-md shadow-sky-500/30'
+                            : 'text-gray-400 hover:text-sky-400 hover:bg-gray-800'
+                        } ${isChangingTimeframe ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        {tf}
+                      </button>
+                    ))}
+                    <div className="h-5 w-px bg-gray-700 ml-1"></div>
+                    <div className="ml-1 flex flex-col items-start">
+                      <span className="text-xs text-cyan-400 leading-tight">
+                        {filteredStrategyPerformances.filter(p => p.isActive).length}/{filteredStrategyPerformances.length} stratégie{filteredStrategyPerformances.length > 1 ? 's' : ''} sur {selectedTimeframe}
                       </span>
-                    )}
+                      {strategyPerformances.length > filteredStrategyPerformances.length && (
+                        <span className="text-[10px] text-gray-500 leading-tight">
+                          ({strategyPerformances.length - filteredStrategyPerformances.length} autre{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''} timeframes)
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ) : (() => {
                   const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
@@ -2330,9 +2442,6 @@ export default function Dashboard() {
                       </span>
                     </div>
 
-                    {/* Separator */}
-                    <div className="w-px h-4 bg-gray-600"></div>
-
                     {strategyPerf?.config && (
                       <>
                         {/* TP */}
@@ -2370,7 +2479,7 @@ export default function Dashboard() {
                       </>
                     )}
 
-                    {/* P&L - At the end */}
+                    {/* P&L - At the end, before separator */}
                     <div className="flex items-center gap-1.5 ml-auto">
                       <span className="text-[10px] text-gray-400 font-semibold">P&L</span>
                       <span className={`font-bold text-sm ${
@@ -2384,30 +2493,29 @@ export default function Dashboard() {
                         </span>
                       </span>
                     </div>
+
+                    {/* Separator - Visual end marker */}
+                    <div className="w-px h-4 bg-gray-600"></div>
                   </div>
                 );
               })}
-              
-              {/* Expand/Collapse Button - Show if more than 1 position */}
-              {activePositions.length > 1 && (
-                <div className="mt-2 pt-2 border-t border-gray-600/30 flex items-center justify-center">
-                  <button
-                    onClick={() => setShowAllPositions(!showAllPositions)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] text-gray-400 hover:text-white transition-colors rounded hover:bg-gray-700/30"
-                  >
-                    <span>
-                      {showAllPositions 
-                        ? `Masquer ${activePositions.length - 1}` 
-                        : `+${activePositions.length - 1}`
-                      }
-                    </span>
-                    <HiChevronDown className={`w-2.5 h-2.5 transition-transform ${showAllPositions ? 'rotate-180' : ''}`} />
-                  </button>
-                </div>
-              )}
               </div>
             );
           })()}
+
+          {/* Expand/Collapse Button - Outside position container, centered on page */}
+          {activePositions.length > 1 && (
+            <div className="flex justify-center py-1">
+              <button
+                onClick={() => setShowAllPositions(!showAllPositions)}
+                className="inline-flex items-center justify-center gap-1 px-2 py-0.5 bg-gray-800/50 text-gray-500 hover:text-gray-300 transition-all duration-200 hover:bg-gray-700/50 rounded border border-gray-700/50"
+                title={showAllPositions ? `Masquer ${activePositions.length - 1} position(s)` : `Voir ${activePositions.length - 1} position(s) supplémentaire(s)`}
+              >
+                <span className="text-[10px] font-medium">+{activePositions.length - 1}</span>
+                <HiChevronDown className={`w-3 h-3 transition-transform duration-200 ${showAllPositions ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+          )}
 
           {/* Trading Criteria & Multi-Strategy Performance Panel */}
           {strategyPerformances.length === 0 ? (

@@ -16,7 +16,7 @@ export class BinanceWebSocketManager {
   private ws: WebSocket | null = null;
   private candles: Candle[] = [];
   // Removed TradingStrategy field; we now rely solely on StrategyManager (CUSTOM only)
-  private strategyManager: StrategyManager;
+  private strategyManager!: StrategyManager; // Will be initialized in initialize()
   private indicatorEngine: IndicatorEngine;
   private state: StrategyState;
   private reconnectAttempts = 0;
@@ -33,8 +33,17 @@ export class BinanceWebSocketManager {
   constructor(onStateUpdate?: (state: StrategyState) => void, timeframe: string = '1m', tradingMode: boolean = false) {
     this.timeframe = timeframe;
     this.tradingMode = tradingMode;
-    // Removed: new TradingStrategy(defaultStrategyConfig)
-    this.strategyManager = new StrategyManager();
+    
+    // Use existing global singleton or create new one
+    const existingManager = StrategyManager.getGlobalInstance();
+    if (existingManager) {
+      this.strategyManager = existingManager;
+      console.log(`🔄 [${timeframe}] Using existing StrategyManager singleton`);
+    } else {
+      this.strategyManager = new StrategyManager();
+      console.log(`🆕 [${timeframe}] Created new StrategyManager (first instance)`);
+    }
+    
     this.indicatorEngine = new IndicatorEngine();
     globalStrategyManager = this.strategyManager; // Expose globally
     this.onStateUpdate = onStateUpdate;
@@ -77,7 +86,7 @@ export class BinanceWebSocketManager {
       return;
     }
 
-    console.log('📊 Fetching historical candles from Binance...');
+    console.log(`📊 [${this.timeframe}] Fetching historical candles from Binance...`);
     
     try {
       // Charger plus de bougies pour avoir les indicateurs MA(99)
@@ -198,14 +207,14 @@ export class BinanceWebSocketManager {
           if (lastCandle && lastCandle.time === newCandle.time) {
             // This is a duplicate, just update the last candle
             this.candles[this.candles.length - 1] = newCandle;
-            console.log(`📈 Updated candle: ${newCandle.close.toFixed(2)} USDT`);
+            console.log(`📈 Updated candle [${this.timeframe}]: ${newCandle.close.toFixed(2)} USDT`);
           } else {
             // This is a new candle
             this.candles.push(newCandle);
             if (this.candles.length > 300) {
               this.candles.shift();
             }
-            console.log(`📈 New candle closed: ${newCandle.close.toFixed(2)} USDT`);
+            console.log(`📈 New candle closed [${this.timeframe}]: ${newCandle.close.toFixed(2)} USDT`);
           }
           
           // Analyze market and check for signals (force analysis on closed candle)
@@ -565,9 +574,9 @@ export class BinanceWebSocketManager {
   /**
    * Toggle a specific strategy (uses provided timeframe or current timeframe)
    */
-  toggleStrategy(strategyName: string, timeframe?: string): boolean {
+  async toggleStrategy(strategyName: string, timeframe?: string): Promise<boolean> {
     const tf = timeframe || this.timeframe; // Use provided timeframe or current
-    return this.strategyManager.toggleStrategy(strategyName, tf);
+    return await this.strategyManager.toggleStrategy(strategyName, tf);
   }
 
   /**

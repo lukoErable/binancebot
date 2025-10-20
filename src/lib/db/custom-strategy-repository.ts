@@ -6,6 +6,10 @@ import { db } from './database';
  */
 
 export class CustomStrategyRepository {
+  // Cache to avoid reloading strategies on every call
+  private static cache: CustomStrategyConfig[] | null = null;
+  private static cacheTimestamp: number = 0;
+  private static CACHE_TTL = 30000; // 30 seconds cache
   /**
    * Save a custom strategy configuration
    */
@@ -40,6 +44,9 @@ export class CustomStrategyRepository {
         config = $4::jsonb,
         updated_at = CURRENT_TIMESTAMP
     `, [config.name, config.strategyType, false, configJson, timeframe]);
+    
+    // Clear cache after saving
+    this.clearCache();
     
     console.log(`✅ Custom strategy "${config.name}" [${timeframe}] saved to database (activated_at=NULL, total_active_time=0)`);
   }
@@ -93,9 +100,16 @@ export class CustomStrategyRepository {
   }
   
   /**
-   * Get all custom strategies
+   * Get all custom strategies (with caching)
    */
-  static async getAllCustomStrategies(): Promise<CustomStrategyConfig[]> {
+  static async getAllCustomStrategies(useCache: boolean = true): Promise<CustomStrategyConfig[]> {
+    // Check cache first
+    const now = Date.now();
+    if (useCache && this.cache && (now - this.cacheTimestamp) < this.CACHE_TTL) {
+      console.log(`📦 Using cached strategies (${this.cache.length} strategies, age: ${Math.floor((now - this.cacheTimestamp) / 1000)}s)`);
+      return this.cache;
+    }
+    
     const result = await db.query('SELECT * FROM strategies WHERE type = $1', ['CUSTOM']);
     
     const strategies: CustomStrategyConfig[] = [];
@@ -136,7 +150,19 @@ export class CustomStrategyRepository {
       }
     }
     
+    // Update cache
+    this.cache = strategies;
+    this.cacheTimestamp = Date.now();
+    
     return strategies;
+  }
+  
+  /**
+   * Clear cache (call this after creating/updating/deleting a strategy)
+   */
+  static clearCache(): void {
+    this.cache = null;
+    this.cacheTimestamp = 0;
   }
   
   /**
@@ -144,6 +170,9 @@ export class CustomStrategyRepository {
    */
   static async deleteCustomStrategy(name: string, timeframe: string = '1m'): Promise<void> {
     await db.query('DELETE FROM strategies WHERE name = $1 AND type = $2 AND timeframe = $3', [name, 'CUSTOM', timeframe]);
+    
+    // Clear cache after deletion
+    this.clearCache();
     
     console.log(`✅ Custom strategy "${name}" [${timeframe}] deleted from database`);
   }

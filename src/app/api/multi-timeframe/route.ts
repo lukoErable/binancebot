@@ -64,6 +64,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Reload StrategyManager to load the new strategies
+    const { StrategyManager } = await import('@/lib/strategy-manager');
+    const strategyManager = StrategyManager.getGlobalInstance();
+    if (strategyManager) {
+      await strategyManager.reloadAllData();
+      console.log(`✅ StrategyManager reloaded with new strategy "${strategyName}"`);
+    }
+
     return NextResponse.json({
       success: true,
       message: `Strategy "${strategyName}" activated on ${timeframes.length} timeframe(s)`,

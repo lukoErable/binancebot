@@ -4,51 +4,51 @@ import { StrategyPerformance } from '@/types/trading';
 import { useEffect, useRef, useState } from 'react';
 import { FaBrain, FaChartLine } from 'react-icons/fa';
 import {
-  HiAdjustments,
-  HiArrowCircleDown,
-  HiArrowCircleUp,
-  HiArrowDown,
-  HiArrowUp,
-  HiBeaker,
-  HiBookOpen,
-  HiChartBar,
-  HiChartPie,
-  HiChartSquareBar,
-  HiCheckCircle,
-  HiChevronDown,
-  HiChevronLeft,
-  HiChevronRight,
-  HiClock,
-  HiCog,
-  HiCollection,
-  HiCurrencyDollar,
-  HiLightningBolt,
-  HiMinusCircle,
-  HiPlus,
-  HiRefresh,
-  HiScale,
-  HiSearch,
-  HiSortAscending,
-  HiSwitchVertical,
-  HiTrash,
-  HiTrendingDown,
-  HiTrendingUp,
-  HiViewGrid,
-  HiX,
-  HiXCircle
+    HiAdjustments,
+    HiArrowCircleDown,
+    HiArrowCircleUp,
+    HiArrowDown,
+    HiArrowUp,
+    HiBeaker,
+    HiBookOpen,
+    HiChartBar,
+    HiChartPie,
+    HiChartSquareBar,
+    HiCheckCircle,
+    HiChevronDown,
+    HiChevronLeft,
+    HiChevronRight,
+    HiClock,
+    HiCog,
+    HiCollection,
+    HiCurrencyDollar,
+    HiLightningBolt,
+    HiMinusCircle,
+    HiPlus,
+    HiRefresh,
+    HiScale,
+    HiSearch,
+    HiSortAscending,
+    HiSwitchVertical,
+    HiTrash,
+    HiTrendingDown,
+    HiTrendingUp,
+    HiViewGrid,
+    HiX,
+    HiXCircle
 } from 'react-icons/hi';
 import {
-  RiBarChartBoxLine,
-  RiCandleLine,
-  RiLineChartLine,
-  RiStockLine
+    RiBarChartBoxLine,
+    RiCandleLine,
+    RiLineChartLine,
+    RiStockLine
 } from 'react-icons/ri';
 import {
-  TbArrowsUpDown,
-  TbChartCandle,
-  TbChartDots,
-  TbTrendingDown,
-  TbTrendingUp
+    TbArrowsUpDown,
+    TbChartCandle,
+    TbChartDots,
+    TbTrendingDown,
+    TbTrendingUp
 } from 'react-icons/tb';
 
 interface IndicatorPanelData {
@@ -724,12 +724,35 @@ export default function StrategyPanel({
 
     const allMet = evaluateGroup(conditions);
     
+    // Format condition with current values for tooltip
+    const formatConditionTooltip = (cond: any): string => {
+      if (!indicatorData) return 'No data';
+      
+      if (cond.type === 'comparison') {
+        const leftValue = indicatorData[cond.indicator];
+        const rightValue = cond.value !== undefined && cond.value !== null 
+          ? (typeof cond.value === 'number' ? cond.value : indicatorData[cond.value])
+          : (cond.indicator2 ? indicatorData[cond.indicator2] : null);
+        
+        const operatorSymbol = cond.operator === 'LT' ? '<' : cond.operator === 'GT' ? '>' : cond.operator === 'EQ' ? '=' : cond.operator;
+        const leftFormatted = typeof leftValue === 'number' ? leftValue.toFixed(2) : leftValue;
+        const rightFormatted = typeof rightValue === 'number' ? rightValue.toFixed(2) : rightValue;
+        
+        return `${cond.indicator}: ${leftFormatted} ${operatorSymbol} ${rightFormatted}`;
+      } else if (cond.type === 'boolean') {
+        const value = indicatorData[cond.indicator];
+        return `${cond.indicator}: ${value ? '✓' : '✗'}`;
+      }
+      return 'Unknown condition';
+    };
+    
     return (
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-gray-400">{formatExitConditionsCompact(conditions)}</span>
         <div className="flex gap-0.5">
           {conditions.conditions.map((cond: any, idx: number) => {
             const met = evaluateCondition(cond);
+            const tooltip = formatConditionTooltip(cond);
             return (
               <div
                 key={idx}
@@ -738,7 +761,7 @@ export default function StrategyPanel({
                     ? 'bg-orange-500 shadow-[0_0_4px_rgba(249,115,22,0.8)]'
                     : 'bg-gray-600'
                 }`}
-                title={met ? 'Condition met' : 'Condition not met'}
+                title={tooltip}
               />
             );
           })}
@@ -1693,19 +1716,23 @@ export default function StrategyPanel({
             }`}
             title={resetAllConfirm ? `Click again to confirm reset all ${currentTimeframe || '1m'} strategies` : `Reset All (delete all ${currentTimeframe || '1m'} trades and stop strategies)`}
           >
-            <HiRefresh className={`${resetAllConfirm ? 'w-5 h-5' : 'w-4 h-4'} transition-all`} />
+            <HiRefresh className="w-4 h-4 transition-all" />
           </button>
         </div>
       </div>
       {/* Draggable Indicators Info Overlay with Category Filters */}
       {showInfoOverlay && (
         <div
-          className="fixed z-[1000] bg-gray-900/95 border border-gray-700 rounded-lg shadow-2xl w-[520px] max-h-[80vh] flex flex-col"
+          className={`fixed z-[1000] bg-gray-900/95 border border-gray-700 rounded-lg shadow-2xl max-h-[80vh] flex flex-col transition-all ${
+            overlayCollapsed ? 'w-auto' : 'w-[520px]'
+          }`}
           style={{ left: overlayPos.x, top: overlayPos.y }}
         >
           {/* Header - Draggable */}
           <div
-            className={`cursor-move flex items-center justify-between border-b border-gray-700 bg-gray-800 rounded-t-lg select-none transition-all ${
+            className={`cursor-move flex items-center bg-gray-800 select-none transition-all ${
+              overlayCollapsed ? 'rounded-lg gap-6' : 'rounded-t-lg border-b border-gray-700 justify-between'
+            } ${
               isStatsSticky ? 'px-2 py-1' : 'px-3 py-2'
             }`}
             onMouseDown={(e) => {
@@ -1720,18 +1747,24 @@ export default function StrategyPanel({
               isStatsSticky ? 'text-xs' : 'text-sm'
             }`}>
               <HiChartBar className={`transition-all ${isStatsSticky ? 'w-3 h-3' : 'w-4 h-4'}`} />
-              <span>Indicators (Live)</span>
-              {highlightLabel && (
-                <span className={`ml-2 px-2 py-0.5 rounded bg-blue-500/20 border border-blue-500/30 text-blue-300 whitespace-nowrap transition-all ${
-                  isStatsSticky ? 'text-[9px]' : 'text-[10px]'
-                }`}>
-                  {highlightLabel}
-                </span>
+              {!overlayCollapsed && (
+                <>
+                  <span>Indicators (Live)</span>
+                  {highlightLabel && (
+                    <span className={`ml-2 px-2 py-0.5 rounded bg-blue-500/20 border border-blue-500/30 text-blue-300 whitespace-nowrap transition-all ${
+                      isStatsSticky ? 'text-[9px]' : 'text-[10px]'
+                    }`}>
+                      {highlightLabel}
+                    </span>
+                  )}
+                </>
               )}
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-gray-400 text-xs">{overlayCollapsed ? 'Show' : 'Hide'}</span>
-              <button onClick={() => setShowInfoOverlay(false)} className="text-gray-400 hover:text-white">✕</button>
+              {!overlayCollapsed && (
+                <span className="text-gray-400 text-xs">Hide</span>
+              )}
+              <button onClick={() => setShowInfoOverlay(false)} className="text-gray-400 hover:text-white transition-colors">✕</button>
             </div>
           </div>
           

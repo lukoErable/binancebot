@@ -2,6 +2,10 @@ import { StrategyPerformance } from '@/types/trading';
 import { pool } from './database';
 
 export class StrategyRepository {
+  // Cache to avoid reloading strategies on every call
+  private static cache: Record<string, unknown>[] | null = null;
+  private static cacheTimestamp: number = 0;
+  private static CACHE_TTL = 30000; // 30 seconds cache
   /**
    * Ensure a strategy row exists in DB; if missing, create it
    */
@@ -132,6 +136,10 @@ export class StrategyRepository {
       const activatedAtSQL = activatedAt ? new Date(activatedAt).toISOString() : null;
       
       await pool.query(query, [isActive, activatedAtSQL, totalActiveTime, strategyName, timeframe]);
+      
+      // Clear cache after status update
+      this.clearCache();
+      
       console.log(`✅ Strategy "${strategyName}" [${timeframe}] status updated: ${isActive ? 'ACTIVE' : 'PAUSED'} (total runtime: ${Math.floor(totalActiveTime / 60)}m)`);
     } catch (error) {
       console.error('❌ Error updating strategy status with time:', error);
@@ -150,17 +158,37 @@ export class StrategyRepository {
   }
 
   /**
-   * Get all strategies from database
+   * Get all strategies from database (with caching)
    */
-  static async getAllStrategies(): Promise<Record<string, unknown>[]> {
+  static async getAllStrategies(useCache: boolean = true): Promise<Record<string, unknown>[]> {
     try {
+      // Check cache first
+      const now = Date.now();
+      if (useCache && this.cache && (now - this.cacheTimestamp) < this.CACHE_TTL) {
+        console.log(`📦 Using cached strategy states (${this.cache.length} strategies, age: ${Math.floor((now - this.cacheTimestamp) / 1000)}s)`);
+        return this.cache;
+      }
+      
       const query = `SELECT * FROM strategies ORDER BY name`;
       const result = await pool.query(query);
+      
+      // Update cache
+      this.cache = result.rows;
+      this.cacheTimestamp = Date.now();
+      
       return result.rows;
     } catch (error) {
       console.error('❌ Error fetching strategies:', error);
       return [];
     }
+  }
+  
+  /**
+   * Clear cache (call this after updating strategy status/config)
+   */
+  static clearCache(): void {
+    this.cache = null;
+    this.cacheTimestamp = 0;
   }
 
   /**
@@ -199,6 +227,10 @@ export class StrategyRepository {
       `;
       
       await pool.query(updateQuery, [JSON.stringify(updatedConfig), strategyName, timeframe]);
+      
+      // Clear cache after config update
+      this.clearCache();
+      
       console.log(`✅ Strategy "${strategyName}" [${timeframe}] config updated:`, config);
     } catch (error) {
       console.error('❌ Error updating strategy config:', error);
@@ -208,4 +240,3 @@ export class StrategyRepository {
 }
 
 export default StrategyRepository;
-

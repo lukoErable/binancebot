@@ -12,19 +12,46 @@ class Database {
       database: process.env.DB_NAME || 'tradingbot_db',
       user: process.env.DB_USER || 'tradingbot_user',
       password: process.env.DB_PASSWORD || 'tradingbot_secure_2024',
-      max: 20, // Maximum number of clients in the pool
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      max: 100, // Increased from 20 to 100 for multi-timeframe support
+      min: 10, // Keep minimum 10 connections ready (increased from 5)
+      idleTimeoutMillis: 60000, // Increased to 60 seconds
+      connectionTimeoutMillis: 10000, // Increased to 10 seconds
+      maxUses: 7500, // Close connections after 7500 uses to prevent memory leaks
+      allowExitOnIdle: true, // Allow pool to shrink when idle
     });
 
-    // Test connection
+    // Test connection and warm up pool
     this.pool.on('connect', () => {
       console.log('✅ Connected to PostgreSQL database');
     });
 
     this.pool.on('error', (err) => {
       console.error('❌ Unexpected database error:', err);
+      // Try to handle connection errors gracefully
+      if (err.message.includes('Connection terminated')) {
+        console.log('🔄 Attempting to reconnect...');
+      }
     });
+
+    // Removed noisy 'remove' event logging
+    
+    // Warm up the pool by establishing minimum connections immediately
+    this.warmUpPool();
+  }
+  
+  /**
+   * Warm up the pool by establishing minimum connections
+   */
+  private async warmUpPool(): Promise<void> {
+    try {
+      console.log('🔥 Warming up database connection pool...');
+      // Execute a simple query to establish initial connections
+      await this.pool.query('SELECT 1');
+      console.log('✅ Database pool warmed up and ready');
+    } catch (error) {
+      console.error('⚠️  Failed to warm up pool:', error);
+      // Don't throw, just log - app can continue
+    }
   }
 
   public static getInstance(): Database {
@@ -38,17 +65,41 @@ class Database {
     return this.pool;
   }
 
-  public async query(text: string, params?: unknown[]) {
+  public async query(text: string, params?: unknown[], retries = 3) {
     const start = Date.now();
-    try {
-      const res = await this.pool.query(text, params);
-      const duration = Date.now() - start;
-      console.log('📊 Executed query', { text: text.substring(0, 50), duration, rows: res.rowCount });
-      return res;
-    } catch (error) {
-      console.error('❌ Query error:', error);
-      throw error;
+    let lastError;
+    
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const res = await this.pool.query(text, params);
+        const duration = Date.now() - start;
+        
+        if (attempt > 1) {
+          console.log(`✅ Query succeeded on attempt ${attempt}`);
+        }
+        
+        // Only log slow queries to reduce noise
+        if (duration > 1000) {
+          console.log('⚠️  Slow query', { text: text.substring(0, 50), duration, rows: res.rowCount });
+        }
+        
+        return res;
+      } catch (error: any) {
+        lastError = error;
+        const isTimeout = error.message?.includes('timeout') || error.message?.includes('Connection terminated');
+        
+        if (isTimeout && attempt < retries) {
+          console.log(`⏳ Query timeout on attempt ${attempt}/${retries}, retrying...`);
+          // Wait a bit before retrying (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, attempt * 500));
+        } else {
+          console.error('❌ Query error:', error);
+          break;
+        }
+      }
     }
+    
+    throw lastError;
   }
 
   public async close(): Promise<void> {

@@ -1,12 +1,14 @@
 import { Candle, StrategyPerformance } from '@/types/trading';
 import { CustomStrategy } from './custom-strategy';
 import CustomStrategyRepository from './db/custom-strategy-repository';
-import GlobalStrategyRepository from './db/global-strategy-repository';
 import StrategyRepository from './db/strategy-repository';
+
+// Global singleton instance - created ONCE at server startup
+let globalStrategyManagerInstance: StrategyManager | null = null;
 
 /**
  * Strategy Manager - Multi-Timeframe Support
- * Manages multiple trading strategies simultaneously on different timeframes
+ * Simple singleton pattern - one instance for all timeframes
  * Key format: "strategyName:timeframe" (e.g., "RSI Strategy:1m", "RSI Strategy:5m")
  */
 export class StrategyManager {
@@ -22,11 +24,35 @@ export class StrategyManager {
   constructor() {
     this.strategies = new Map();
     
-    // Load custom strategies from database FIRST
-    this.loadCustomStrategies().then(() => {
-      // Then load strategy states (is_active, activated_at, configs)
-    this.loadFromDatabase();
-    });
+    // Store as global singleton
+    if (!globalStrategyManagerInstance) {
+      globalStrategyManagerInstance = this;
+      console.log('🚀 StrategyManager: Created singleton instance');
+      
+      // Load custom strategies from database FIRST
+      this.loadCustomStrategies().then(() => {
+        // Then load strategy states (is_active, activated_at, configs)
+        this.loadFromDatabase();
+      });
+    }
+  }
+  
+  /**
+   * Get the global singleton instance (simple getter)
+   */
+  static getGlobalInstance(): StrategyManager | null {
+    return globalStrategyManagerInstance;
+  }
+  
+  /**
+   * Force reload of all data (call after reset)
+   */
+  async reloadAllData(): Promise<void> {
+    console.log('🔄 Reloading all strategy data...');
+    this.strategies.clear();
+    await this.loadCustomStrategies();
+    await this.loadFromDatabase();
+    console.log('✅ Strategy data reloaded');
   }
 
   /**
@@ -46,14 +72,11 @@ export class StrategyManager {
 
   /**
    * Load strategy states from database
+   * Each timeframe is INDEPENDENT (no shared timers)
    */
   private async loadFromDatabase(): Promise<void> {
     try {
-      // Load global strategy states (shared timers)
-      const globalStates = await GlobalStrategyRepository.getAllGlobalStates();
-      console.log(`📥 Loaded ${globalStates.size} global strategy states`);
-      
-      // Load strategy activation states and configs
+      // Load strategy activation states and configs (per timeframe, independent)
       const strategies = await StrategyRepository.getAllStrategies();
       strategies.forEach((dbStrategy: any) => {
         const strategyName = dbStrategy.name;
@@ -66,51 +89,25 @@ export class StrategyManager {
           const strategyData = this.strategies.get(key)!;
           strategyData.isActive = isActive;
           
-          // Use GLOBAL state for timer (shared across all timeframes)
-          const globalState = globalStates.get(strategyName);
-          if (globalState) {
-            // Use global shared timer
-            strategyData.totalActiveTime = globalState.totalActiveTime;
+          // Use LOCAL state for timer (independent per timeframe)
+          strategyData.totalActiveTime = dbStrategy.total_active_time || 0;
+          const activatedAtDb = dbStrategy.activated_at;
+          
+          if (isActive && activatedAtDb) {
+            // Checkpoint logic for server restart
+            const oldActivatedAt = new Date(activatedAtDb).getTime();
+            const elapsedBeforeRestart = Math.floor((Date.now() - oldActivatedAt) / 1000);
             
-            if (isActive && globalState.isGloballyActive && globalState.activatedAt) {
-              // Strategy is globally active - use shared timestamp
-              strategyData.activatedAt = globalState.activatedAt;
-              console.log(`  └─ [${timeframe}] ACTIVE with global timer: ${Math.floor(globalState.totalActiveTime / 60)}m`);
-            } else if (isActive) {
-              // Strategy is active but no global timestamp yet - create one
-              strategyData.activatedAt = Date.now();
-              // Update global state
-              GlobalStrategyRepository.updateGlobalState(strategyName, true, Date.now(), globalState.totalActiveTime)
-                .catch(err => console.error('Failed to update global state:', err));
-            } else {
-              // Strategy is inactive
-              strategyData.activatedAt = null;
+            if (elapsedBeforeRestart < 600) {
+              strategyData.totalActiveTime = (strategyData.totalActiveTime || 0) + elapsedBeforeRestart;
+              console.log(`⏱️ Checkpoint: Added ${elapsedBeforeRestart}s to "${strategyName}" [${timeframe}]`);
             }
+            
+            strategyData.activatedAt = Date.now();
+          } else if (isActive) {
+            strategyData.activatedAt = Date.now();
           } else {
-            // No global state found - use local state and create global state
-            strategyData.totalActiveTime = dbStrategy.total_active_time || 0;
-            const activatedAtDb = dbStrategy.activated_at;
-            
-            if (isActive && activatedAtDb) {
-              // Checkpoint logic for server restart
-              const oldActivatedAt = new Date(activatedAtDb).getTime();
-              const elapsedBeforeRestart = Math.floor((Date.now() - oldActivatedAt) / 1000);
-              
-              if (elapsedBeforeRestart < 600) {
-                strategyData.totalActiveTime = (strategyData.totalActiveTime || 0) + elapsedBeforeRestart;
-                console.log(`⏱️ Checkpoint: Added ${elapsedBeforeRestart}s to "${strategyName}" [${timeframe}]`);
-              }
-              
-              strategyData.activatedAt = Date.now();
-              
-              // Create global state
-              GlobalStrategyRepository.updateGlobalState(strategyName, true, Date.now(), strategyData.totalActiveTime || 0)
-                .catch(err => console.error('Failed to create global state:', err));
-            } else if (isActive) {
-              strategyData.activatedAt = Date.now();
-            } else {
-              strategyData.activatedAt = null;
-            }
+            strategyData.activatedAt = null;
           }
           
           // Apply config if available (TP/SL/MaxPos/Cooldown)
@@ -132,16 +129,44 @@ export class StrategyManager {
           
           const totalMinutes = Math.floor((strategyData.totalActiveTime || 0) / 60);
           const currentMinutes = strategyData.activatedAt ? Math.floor((Date.now() - strategyData.activatedAt) / 60000) : 0;
-          console.log(`📊 Loaded strategy state: ${strategyName} [${timeframe}] = ${isActive ? 'ON' : 'OFF'} (total: ${totalMinutes}m${currentMinutes > 0 ? ' + current: ' + currentMinutes + 'm' : ''})`);
+          console.log(`📊 Loaded strategy state: ${strategyName} [${timeframe}] = ${isActive ? 'ON' : 'OFF'} (independent timer: ${totalMinutes}m${currentMinutes > 0 ? ' + current: ' + currentMinutes + 'm' : ''})`);
         }
       });
 
+      // OPTIMIZATION: Load ALL trades and positions in TWO queries (instead of 21+21)
+      console.log('📊 Loading ALL trades in single query (optimization)...');
+      const { CompletedTradeRepository } = await import('./db/completed-trade-repository');
+      const { default: OpenPositionRepository } = await import('./db/open-position-repository');
+      
+      // Load all data in parallel
+      const [allTrades, allPositions] = await Promise.all([
+        CompletedTradeRepository.getAllCompletedTrades(0), // 0 = no limit
+        OpenPositionRepository.getAllOpenPositions()
+      ]);
+      
+      console.log(`✅ Loaded ${allTrades.length} total trades and ${allPositions.size} open positions`);
+      
+      // Group trades by strategy name
+      const tradesByStrategy = new Map<string, any[]>();
+      allTrades.forEach(trade => {
+        if (!tradesByStrategy.has(trade.strategyName)) {
+          tradesByStrategy.set(trade.strategyName, []);
+        }
+        tradesByStrategy.get(trade.strategyName)!.push(trade);
+      });
+      
       // Restore completed trades and open positions for all strategies
       for (const [key, strategyData] of this.strategies) {
         const { name } = this.parseStrategyKey(key);
         try {
-            if ('restoreFromDatabase' in strategyData.strategy) {
-            await (strategyData.strategy as any).restoreFromDatabase();
+          // Get pre-loaded data
+          const strategyTrades = tradesByStrategy.get(name) || [];
+          const positionKey = key; // "strategyName:timeframe"
+          const openPosition = allPositions.get(positionKey);
+          
+          // Restore with pre-loaded data
+          if ('restoreFromDatabaseWithTrades' in strategyData.strategy) {
+            await (strategyData.strategy as any).restoreFromDatabaseWithTrades(strategyTrades, openPosition);
           }
         } catch (error) {
           console.error(`❌ Error restoring ${name} [${strategyData.timeframe}]:`, error);
@@ -154,15 +179,13 @@ export class StrategyManager {
 
   /**
    * Load custom strategies from database
+   * Each timeframe is INDEPENDENT (no shared timers)
    */
   private async loadCustomStrategies(): Promise<void> {
     try {
       const customConfigs = await CustomStrategyRepository.getAllCustomStrategies();
       
-      // Load global states (shared timers)
-      const globalStates = await GlobalStrategyRepository.getAllGlobalStates();
-      
-      // Also get activated_at and total_active_time from strategies table
+      // Get activated_at and total_active_time from strategies table (per timeframe)
       const strategiesData = await StrategyRepository.getAllStrategies();
       const activatedAtMap = new Map<string, number | null>();
       const totalActiveTimeMap = new Map<string, number>();
@@ -183,12 +206,9 @@ export class StrategyManager {
         const strategy = new CustomStrategy(config);
         const isActive = config.isActive !== undefined ? config.isActive : true;
         
-        // Use GLOBAL state for timer
-        const globalState = globalStates.get(config.name);
-        const totalActiveTime = globalState?.totalActiveTime || totalActiveTimeMap.get(key) || 0;
-        const activatedAt = (isActive && globalState?.isGloballyActive && globalState?.activatedAt) 
-          ? globalState.activatedAt 
-          : (isActive ? Date.now() : null);
+        // Use LOCAL state for timer (independent per timeframe)
+        const totalActiveTime = totalActiveTimeMap.get(key) || 0;
+        const activatedAt = isActive ? Date.now() : null;
         
         this.strategies.set(key, {
           strategy,
@@ -198,12 +218,6 @@ export class StrategyManager {
           activatedAt,
           totalActiveTime
         });
-        
-        // Ensure global state exists
-        if (!globalState) {
-          GlobalStrategyRepository.ensureGlobalStateExists(config.name)
-            .catch(err => console.error('Failed to ensure global state:', err));
-        }
         
         // Update database to reset activatedAt for active strategies
         if (isActive) {
@@ -216,7 +230,7 @@ export class StrategyManager {
           ).catch(err => console.error('Failed to update activatedAt on load:', err));
         }
         
-        console.log(`✅ Added custom strategy: ${config.name} [${timeframe}] (${isActive ? 'ACTIVE' : 'INACTIVE'}) - Total runtime: ${Math.floor(totalActiveTime / 60)}m${isActive ? ' (session restarted)' : ''}`);
+        console.log(`✅ Added custom strategy: ${config.name} [${timeframe}] (${isActive ? 'ACTIVE' : 'INACTIVE'}) - Independent timer: ${Math.floor(totalActiveTime / 60)}m${isActive ? ' (session restarted)' : ''}`);
       }
       
       console.log(`✅ Loaded ${customConfigs.length} custom strategies`);
@@ -254,7 +268,7 @@ export class StrategyManager {
 
   /**
    * Toggle strategy active state for a specific timeframe
-   * Now uses global shared timer across all timeframes
+   * Each timeframe is now INDEPENDENT (no shared timer)
    */
   async toggleStrategy(name: string, timeframe: string = '1m'): Promise<boolean> {
     const key = this.getStrategyKey(name, timeframe);
@@ -264,48 +278,37 @@ export class StrategyManager {
     const wasActive = strategyData.isActive;
     const newState = !strategyData.isActive;
     
-    // Get current global state
-    const globalState = await GlobalStrategyRepository.getGlobalState(name);
-    let globalTotalTime = globalState?.totalActiveTime || 0;
-    let globalActivatedAt = globalState?.activatedAt || null;
+    // Get current time for THIS timeframe only (independent)
+    let localTotalTime = strategyData.totalActiveTime || 0;
+    let localActivatedAt = strategyData.activatedAt || null;
     
     if (newState) {
-      // Activating: Use shared global timestamp
-      if (!globalActivatedAt) {
-        globalActivatedAt = Date.now();
-      }
-      strategyData.activatedAt = globalActivatedAt;
+      // Activating: Start timer for THIS timeframe
+      localActivatedAt = Date.now();
+      strategyData.activatedAt = localActivatedAt;
       strategyData.isActive = true;
-      console.log(`🔄 Strategy "${name}" [${timeframe}] ACTIVATED (global timer: ${Math.floor(globalTotalTime / 60)}m)`);
+      console.log(`🔄 Strategy "${name}" [${timeframe}] ACTIVATED (independent timer: ${Math.floor(localTotalTime / 60)}m)`);
     } else {
-      // Deactivating: Add elapsed time to global total
-      if (globalActivatedAt) {
-        const elapsedSeconds = Math.floor((Date.now() - globalActivatedAt) / 1000);
-        globalTotalTime = globalTotalTime + elapsedSeconds;
-        console.log(`⏸️ Strategy "${name}" [${timeframe}] PAUSED (session: ${elapsedSeconds}s, global total: ${globalTotalTime}s)`);
+      // Deactivating: Add elapsed time to THIS timeframe's total
+      if (localActivatedAt) {
+        const elapsedSeconds = Math.floor((Date.now() - localActivatedAt) / 1000);
+        localTotalTime = localTotalTime + elapsedSeconds;
+        console.log(`⏸️ Strategy "${name}" [${timeframe}] PAUSED (session: ${elapsedSeconds}s, total: ${localTotalTime}s)`);
       }
-      globalActivatedAt = null;
+      localActivatedAt = null;
       strategyData.activatedAt = null;
       strategyData.isActive = false;
     }
     
-    // Update global shared time for all instances
-    strategyData.totalActiveTime = globalTotalTime;
+    // Update local time for THIS timeframe only
+    strategyData.totalActiveTime = localTotalTime;
     
-    // Save global state
-    await GlobalStrategyRepository.updateGlobalState(
-      name,
-      newState,
-      globalActivatedAt,
-      globalTotalTime
-    );
-    
-    // Also save to per-timeframe table for backward compatibility
+    // Save to database (per-timeframe, independent)
     await StrategyRepository.updateStrategyStatusWithTime(
       name,
       newState,
-      globalActivatedAt,
-      globalTotalTime,
+      localActivatedAt,
+      localTotalTime,
       timeframe
     );
     
@@ -323,20 +326,6 @@ export class StrategyManager {
     const key = this.getStrategyKey(name, timeframe);
     const strategyData = this.strategies.get(key);
     return strategyData?.isActive || false;
-  }
-
-  /**
-   * Sync timer for all instances of a strategy (after toggle)
-   */
-  async syncGlobalTimer(name: string, activatedAt: number | null, totalActiveTime: number): Promise<void> {
-    // Update all instances of this strategy across all timeframes
-    this.strategies.forEach((strategyData, key) => {
-      const { name: strategyName } = this.parseStrategyKey(key);
-      if (strategyName === name) {
-        strategyData.activatedAt = activatedAt;
-        strategyData.totalActiveTime = totalActiveTime;
-      }
-    });
   }
 
   /**
@@ -558,8 +547,9 @@ export class StrategyManager {
     }
 
     try {
+      // Delete ONLY trades and positions for THIS specific timeframe
       const { CompletedTradeRepository } = await import('./db/completed-trade-repository');
-      await CompletedTradeRepository.deleteStrategyCompletedTrades(name);
+      await CompletedTradeRepository.deleteStrategyCompletedTrades(name, timeframe);
       const { default: OpenPositionRepository } = await import('./db/open-position-repository');
       await OpenPositionRepository.deleteOpenPosition(name, timeframe);
 

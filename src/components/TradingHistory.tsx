@@ -40,13 +40,14 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
 
   // Active positions now displayed in Dashboard
 
-  // Get completed trades
+  // Get completed trades (already filtered by timeframe in Dashboard)
   const completedTrades = useMemo(() => {
     let trades: any[] = [];
     
     if (selectedStrategy === 'GLOBAL') {
       strategyPerformances.forEach(perf => {
         if (perf.completedTrades) {
+          // Trades are already filtered by timeframe in Dashboard
           trades = [...trades, ...perf.completedTrades.map(t => ({ 
             ...t, 
             strategyName: perf.strategyName,
@@ -56,6 +57,7 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
       });
     } else {
       const strategy = strategyPerformances.find(p => p.strategyName === selectedStrategy);
+      // Trades are already filtered by timeframe in Dashboard
       trades = strategy?.completedTrades || [];
     }
     
@@ -114,6 +116,28 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
       minute: '2-digit',
       second: '2-digit'
     });
+  };
+
+  const formatTimeAgo = (timestamp: number) => {
+    const now = Date.now();
+    const diff = now - timestamp;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (seconds < 60) {
+      return `il y a ${seconds}s`;
+    } else if (minutes < 60) {
+      const secs = seconds % 60;
+      return `il y a ${minutes}min ${secs}s`;
+    } else if (hours < 24) {
+      const mins = minutes % 60;
+      return `il y a ${hours}h ${mins}min`;
+    } else {
+      const hrs = hours % 24;
+      return `il y a ${days}j ${hrs}h`;
+    }
   };
 
   const formatDuration = (ms: number) => {
@@ -333,13 +357,23 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                               </span>
                             );
                           })()}
-                          <span>{formatTime(trade.exitTime)}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-500 text-[10px]">{formatTimeAgo(trade.exitTime)}</span>
+                            <span>{formatTime(trade.exitTime)}</span>
+                          </div>
                         </div>
                       </div>
                     ) : (
                       // Back - Entry/Exit reasons on one line
                       <div className="flex items-center justify-between text-xs">
                         <div className="flex items-center gap-2 flex-1">
+                          {/* Position Type Badge - Always visible */}
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                            trade.type === 'LONG' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+                          }`}>
+                            {trade.type}
+                          </span>
+                          
                           {/* Entry */}
                           <div className="flex items-center gap-1.5">
                             <span className="text-green-400 font-semibold">📥</span>
@@ -355,8 +389,45 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                           </div>
                         </div>
                         
-                        {/* Timestamp */}
-                        <span className="text-gray-500 text-xs ml-3">{formatTime(trade.exitTime)}</span>
+                        {/* Timestamp with Strategy Name */}
+                        <div className="flex items-center gap-2 ml-3 text-gray-500 text-xs">
+                          {/* Strategy Name Badge - Same position as front */}
+                          {selectedStrategy === 'GLOBAL' && trade.strategyType && (() => {
+                            const colors = getStrategyColor(trade.strategyType, trade.customColor);
+                            // Map strategy type to bg color
+                            const bgColorMap: Record<string, string> = {
+                              'RSI_EMA': 'bg-blue-500/20',
+                              'MOMENTUM_CROSSOVER': 'bg-purple-500/20',
+                              'VOLUME_MACD': 'bg-orange-500/20',
+                              'NEURAL_SCALPER': 'bg-pink-500/20',
+                              'BOLLINGER_BOUNCE': 'bg-teal-500/20',
+                              'TREND_FOLLOWER': 'bg-cyan-500/20',
+                              'CUSTOM': colors.text.includes('emerald') ? 'bg-emerald-500/20' :
+                                        colors.text.includes('rose') ? 'bg-rose-500/20' :
+                                        colors.text.includes('indigo') ? 'bg-indigo-500/20' :
+                                        colors.text.includes('violet') ? 'bg-violet-500/20' :
+                                        colors.text.includes('amber') ? 'bg-amber-500/20' :
+                                        colors.text.includes('lime') ? 'bg-lime-500/20' :
+                                        colors.text.includes('sky') ? 'bg-sky-500/20' :
+                                        colors.text.includes('fuchsia') ? 'bg-fuchsia-500/20' :
+                                        colors.text.includes('pink') ? 'bg-pink-500/20' :
+                                        colors.text.includes('red') ? 'bg-red-500/20' :
+                                        colors.text.includes('green') ? 'bg-green-500/20' :
+                                        colors.text.includes('slate') ? 'bg-slate-500/20' :
+                                        colors.text.includes('stone') ? 'bg-stone-500/20' :
+                                        'bg-gray-500/20'
+                            };
+                            const bgColor = bgColorMap[trade.strategyType] || 'bg-gray-500/20';
+                            
+                            return (
+                              <span className={`text-[10px] ${colors.text} ${bgColor} px-1.5 py-0.5 rounded font-medium`}>
+                                {trade.strategyName}
+                              </span>
+                            );
+                          })()}
+                          <span className="text-gray-500 text-[10px]">{formatTimeAgo(trade.exitTime)}</span>
+                          <span className="text-gray-500 text-xs">{formatTime(trade.exitTime)}</span>
+                        </div>
                       </div>
                     )}
                   </div>

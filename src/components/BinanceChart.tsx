@@ -205,14 +205,6 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
 
   const curveVisibility = getCurveVisibility();
 
-  if (!state.candles || state.candles.length === 0) {
-    return (
-      <div className="bg-gray-800 h-96 flex items-center justify-center">
-        <div className="text-gray-400">Loading chart data...</div>
-      </div>
-    );
-  }
-
   // Calculate EMA for each candle
   const calculateEMA = (candles: { close: number }[], period: number, index: number): number | null => {
     if (index < period - 1) return null;
@@ -232,8 +224,8 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
     return (candles[index].close - previousEMA) * multiplier + previousEMA;
   };
 
-  // Prepare signals for chart display
   // Prepare signals for chart display (optimized for real-time performance)
+  // MUST be before any conditional returns to respect React Hooks rules
   const prepareSignalsForChart = useMemo(() => {
     if (!strategyPerformances || strategyPerformances.length === 0) {
       return [];
@@ -366,6 +358,15 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       closeLongSignals?: Array<{ price: number; strategy: { name: string; type: string }; reason: string }>;
       closeShortSignals?: Array<{ price: number; strategy: { name: string; type: string }; reason: string }>;
     };
+  }
+
+  // Early return AFTER all hooks if no data
+  if (!state.candles || state.candles.length === 0) {
+    return (
+      <div className="bg-gray-800 h-96 flex items-center justify-center">
+        <div className="text-gray-400">Loading chart data...</div>
+      </div>
+    );
   }
 
   const CustomTooltip = ({ active, payload, label }: {

@@ -56,6 +56,9 @@ export class CompletedTradeRepository {
 
   /**
    * Get completed trades for a strategy
+   * @param strategyName - Name of the strategy
+   * @param limit - Maximum number of trades to return (0 = no limit, returns ALL trades)
+   * @param timeframe - Optional timeframe filter
    */
   static async getCompletedTradesByStrategy(
     strategyName: string,
@@ -68,20 +71,30 @@ export class CompletedTradeRepository {
       
       if (timeframe) {
         query = `
-          SELECT * FROM completed_trades
+          SELECT 
+            id, strategy_name, strategy_type, position_type,
+            entry_price, entry_time, entry_reason,
+            exit_price, exit_time, exit_reason,
+            quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
+          FROM completed_trades
           WHERE strategy_name = $1 AND timeframe = $2
           ORDER BY exit_time DESC
-          LIMIT $3
+          ${limit > 0 ? 'LIMIT $3' : ''}
         `;
-        values = [strategyName, timeframe, limit];
+        values = limit > 0 ? [strategyName, timeframe, limit] : [strategyName, timeframe];
       } else {
         query = `
-          SELECT * FROM completed_trades
+          SELECT 
+            id, strategy_name, strategy_type, position_type,
+            entry_price, entry_time, entry_reason,
+            exit_price, exit_time, exit_reason,
+            quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
+          FROM completed_trades
           WHERE strategy_name = $1
           ORDER BY exit_time DESC
-          LIMIT $2
+          ${limit > 0 ? 'LIMIT $2' : ''}
         `;
-        values = [strategyName, limit];
+        values = limit > 0 ? [strategyName, limit] : [strategyName];
       }
       
       const result = await pool.query(query, values);
@@ -113,16 +126,34 @@ export class CompletedTradeRepository {
 
   /**
    * Get all completed trades
+   * @param limit - Maximum number of trades to return (0 = no limit, returns ALL trades)
    */
   static async getAllCompletedTrades(limit: number = 100): Promise<CompletedTrade[]> {
     try {
-      const query = `
-        SELECT * FROM completed_trades
-        ORDER BY exit_time DESC
-        LIMIT $1
-      `;
+      const query = limit > 0 
+        ? `
+          SELECT 
+            id, strategy_name, strategy_type, position_type,
+            entry_price, entry_time, entry_reason,
+            exit_price, exit_time, exit_reason,
+            quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
+          FROM completed_trades
+          ORDER BY exit_time DESC
+          LIMIT $1
+        `
+        : `
+          SELECT 
+            id, strategy_name, strategy_type, position_type,
+            entry_price, entry_time, entry_reason,
+            exit_price, exit_time, exit_reason,
+            quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
+          FROM completed_trades
+          ORDER BY exit_time DESC
+        `;
       
-      const result = await pool.query(query, [limit]);
+      const result = limit > 0 
+        ? await pool.query(query, [limit])
+        : await pool.query(query);
       
       return result.rows.map((row: any) => ({
         id: row.id,
@@ -151,12 +182,25 @@ export class CompletedTradeRepository {
 
   /**
    * Delete completed trades for a strategy (for reset)
+   * @param strategyName - Name of the strategy
+   * @param timeframe - Optional timeframe filter (if provided, only delete trades for that timeframe)
    */
-  static async deleteStrategyCompletedTrades(strategyName: string): Promise<void> {
+  static async deleteStrategyCompletedTrades(strategyName: string, timeframe?: string): Promise<void> {
     try {
-      const query = `DELETE FROM completed_trades WHERE strategy_name = $1`;
-      const result = await pool.query(query, [strategyName]);
-      console.log(`🗑️ Deleted ${result.rowCount} completed trades for "${strategyName}"`);
+      let query: string;
+      let values: any[];
+      
+      if (timeframe) {
+        query = `DELETE FROM completed_trades WHERE strategy_name = $1 AND timeframe = $2`;
+        values = [strategyName, timeframe];
+      } else {
+        query = `DELETE FROM completed_trades WHERE strategy_name = $1`;
+        values = [strategyName];
+      }
+      
+      const result = await pool.query(query, values);
+      const tfInfo = timeframe ? ` [${timeframe}]` : ' (all timeframes)';
+      console.log(`🗑️ Deleted ${result.rowCount} completed trades for "${strategyName}"${tfInfo}`);
     } catch (error) {
       console.error('❌ Error deleting completed trades:', error);
     }
