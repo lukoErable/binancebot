@@ -18,11 +18,15 @@ export class StrategyRepository {
       if (exists.rowCount && exists.rowCount > 0) return;
 
       const insertQuery = `
-        INSERT INTO strategies (name, type, is_active, config, timeframe, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO strategies (name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `;
-      await pool.query(insertQuery, [name, type, isActive, JSON.stringify(config || {}), timeframe]);
-      console.log(`✅ Strategy created in DB: ${name} [${timeframe}] (${type})`);
+      // Initialize activated_at to NULL and total_active_time to 0
+      const activatedAt = null;
+      const totalActiveTime = 0;
+      
+      await pool.query(insertQuery, [name, type, isActive, JSON.stringify(config || {}), timeframe, activatedAt, totalActiveTime]);
+      console.log(`✅ Strategy created in DB: ${name} [${timeframe}] (${type}) - initialized with activated_at=NULL, total_active_time=0`);
     } catch (error) {
       console.error('❌ Error ensuring strategy exists:', error);
     }

@@ -205,10 +205,10 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
   const removeCondition = (index: number, type: ConditionType) => {
     switch (type) {
       case 'longEntry':
-        setLongEntryConditions(longEntryConditions.filter((_, i) => i !== index));
+      setLongEntryConditions(longEntryConditions.filter((_, i) => i !== index));
         break;
       case 'shortEntry':
-        setShortEntryConditions(shortEntryConditions.filter((_, i) => i !== index));
+      setShortEntryConditions(shortEntryConditions.filter((_, i) => i !== index));
         break;
       case 'longExit':
         setLongExitConditions(longExitConditions.filter((_, i) => i !== index));
@@ -266,12 +266,12 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
       alert('Please enter a strategy name');
       return;
     }
-
+    
     if (longEntryConditions.length === 0 || shortEntryConditions.length === 0) {
       alert('Please add at least one condition for both Long and Short entry');
       return;
     }
-
+    
     const config: CustomStrategyConfig = {
       name: name.trim(),
       description: description.trim(),
@@ -293,7 +293,7 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
       timeframe: '1m', // Default timeframe for new strategies
       simulationMode: true
     };
-
+    
     onSave(config);
   };
 
@@ -330,7 +330,7 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
     });
     return indicators;
   };
-
+  
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[90vw] max-w-7xl h-[90vh] flex flex-col">
@@ -347,7 +347,7 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
             <HiX className="w-6 h-6 text-gray-400" />
           </button>
         </div>
-
+        
         {/* Content */}
         <div className="flex-1 overflow-hidden flex">
           {/* Left: Configuration */}
@@ -365,7 +365,7 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
               />
             </div>
-
+            
             {/* Description */}
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-2">Description</label>
@@ -376,14 +376,14 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                 rows={3}
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600 resize-none"
               />
-            </div>
-
+          </div>
+          
             {/* Color */}
             <div className="mb-6">
               <label className="block text-xs text-gray-400 mb-2">Color</label>
               <div className="grid grid-cols-4 gap-2">
                 {AVAILABLE_COLORS.map(c => (
-                  <button
+              <button
                     key={c.value}
                     onClick={() => setColor(c.value)}
                     className={`h-8 rounded ${c.class} ${color === c.value ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900' : 'opacity-50 hover:opacity-100'} transition-all`}
@@ -392,64 +392,64 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                 ))}
               </div>
             </div>
-
+            
             <h3 className="text-lg font-semibold text-white mb-4 pt-4 border-t border-gray-700">Risk Management</h3>
             
             {/* Take Profit */}
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-2">Take Profit (%)</label>
-              <input
-                type="number"
-                value={profitTarget}
-                onChange={(e) => setProfitTarget(parseFloat(e.target.value))}
-                step="0.1"
+                <input
+                  type="number"
+                  value={profitTarget}
+                  onChange={(e) => setProfitTarget(parseFloat(e.target.value))}
+                  step="0.1"
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
-              />
-            </div>
-
+                />
+              </div>
+              
             {/* Stop Loss */}
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-2">Stop Loss (%)</label>
-              <input
-                type="number"
-                value={stopLoss}
-                onChange={(e) => setStopLoss(parseFloat(e.target.value))}
-                step="0.1"
+                <input
+                  type="number"
+                  value={stopLoss}
+                  onChange={(e) => setStopLoss(parseFloat(e.target.value))}
+                  step="0.1"
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
-              />
-            </div>
-
+                />
+              </div>
+              
             {/* Max Position Time */}
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-2">Max Position Time (min)</label>
-              <input
-                type="number"
-                value={maxPositionTime}
+                <input
+                  type="number"
+                  value={maxPositionTime}
                 onChange={(e) => setMaxPositionTime(parseFloat(e.target.value))}
-                step="1"
+                  step="1"
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
-              />
-            </div>
-
+                />
+              </div>
+              
             {/* Cooldown */}
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-2">Cooldown (min)</label>
-              <input
-                type="number"
-                value={cooldownPeriod}
+                <input
+                  type="number"
+                  value={cooldownPeriod}
                 onChange={(e) => setCooldownPeriod(parseFloat(e.target.value))}
-                step="1"
+                  step="1"
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-gray-600"
-              />
-            </div>
-
+                />
+              </div>
+              
             {/* Position Size */}
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-2">Position Size (0-1)</label>
-              <input
-                type="number"
-                value={positionSize}
-                onChange={(e) => setPositionSize(parseFloat(e.target.value))}
+                <input
+                  type="number"
+                  value={positionSize}
+                  onChange={(e) => setPositionSize(parseFloat(e.target.value))}
                 step="0.01"
                 min="0"
                 max="1"
@@ -457,7 +457,7 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
               />
             </div>
           </div>
-
+          
           {/* Middle: Condition Builder */}
           <div className="flex-1 flex flex-col">
             {/* Section Tabs */}
@@ -471,7 +471,7 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                 ].map(section => {
                   const Icon = section.icon;
                   return (
-                    <button
+            <button
                       key={section.id}
                       onClick={() => setActiveSection(section.id as ConditionType)}
                       className={`flex items-center justify-between px-4 py-3 rounded-lg border-2 transition-all ${
@@ -485,12 +485,12 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                         <span className="text-sm font-medium text-white">{section.label}</span>
                       </div>
                       <span className="text-xs bg-gray-700 px-2 py-0.5 rounded">{section.count}</span>
-                    </button>
+            </button>
                   );
                 })}
-              </div>
-            </div>
-
+        </div>
+      </div>
+      
             {/* Current Conditions */}
             <div className="p-6 border-b border-gray-700">
               <h4 className="text-sm font-semibold text-white mb-3">
@@ -520,8 +520,8 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                         <div className="flex items-center gap-2 min-w-[140px]">
                           <span className="text-xs text-gray-500 font-mono">{index + 1}.</span>
                           <span className="text-sm text-white font-medium">{getIndicatorLabel(condition.indicator)}</span>
-                        </div>
-                        
+              </div>
+
                         {condition.type === 'comparison' && (
                           <>
                             {/* Operator */}
@@ -548,7 +548,7 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                                   placeholder="Value"
                                 />
                                 <span className="text-xs text-blue-400 bg-blue-900/30 px-2 py-1 rounded font-semibold">NUM</span>
-                              </div>
+              </div>
                             ) : (
                               <div className="flex items-center gap-2">
                                 <select
@@ -563,11 +563,11 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                                   ))}
                                 </select>
                                 <span className="text-xs text-purple-400 bg-purple-900/30 px-2 py-1 rounded font-semibold">IND</span>
-                              </div>
+                  </div>
                             )}
-                            
+            
                             {/* Toggle button */}
-                            <button
+              <button
                               onClick={() => updateCondition(index, activeSection, { 
                                 compareType: condition.compareType === 'number' ? 'indicator' : 'number',
                                 value: condition.compareType === 'number' ? 'price' : 0
@@ -583,8 +583,8 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                             >
                               {condition.compareType === 'number' ? '123→IND' : 'IND→123'}
                             </button>
-                          </>
-                        )}
+                  </>
+                )}
                         
                         {condition.type === 'boolean' && (
                           <div className="flex items-center gap-2">
@@ -593,21 +593,21 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                           </div>
                         )}
                         
-                        <button
+              <button
                           onClick={() => removeCondition(index, activeSection)}
                           className="ml-auto p-1.5 hover:bg-red-900/20 border border-transparent hover:border-red-600/50 rounded transition-all"
                           title="Remove condition"
                         >
                           <HiTrash className="w-4 h-4 text-red-400" />
-                        </button>
-                      </div>
+              </button>
+            </div>
                     );
                   })}
-                </div>
-              )}
+        </div>
+      )}
             </div>
-
-            {/* Indicator Selection */}
+            
+              {/* Indicator Selection */}
             <div className="flex-1 overflow-hidden flex flex-col p-6">
               <h4 className="text-sm font-semibold text-white mb-3">Add Indicator</h4>
               
@@ -630,8 +630,8 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
                     </button>
                   );
                 })}
-              </div>
-
+                      </div>
+                      
               {/* Indicators Grid */}
               <div className="flex-1 overflow-y-auto">
                 <div className="grid grid-cols-3 gap-2">
@@ -656,20 +656,20 @@ export default function StrategyBuilder({ onSave, onClose, initialConfig }: Stra
               </div>
             </div>
           </div>
-        </div>
-
+            </div>
+            
         {/* Footer */}
         <div className="flex items-center justify-between p-6 border-t border-gray-700">
           <div className="text-sm text-gray-400">
             Strategy must have at least Long Entry and Short Entry conditions
           </div>
           <div className="flex gap-3">
-            <button
+              <button
               onClick={onClose}
               className="px-6 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-white transition-colors"
-            >
-              Cancel
-            </button>
+              >
+                Cancel
+              </button>
             <button
               onClick={handleSave}
               className="flex items-center gap-2 px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white font-medium transition-colors"

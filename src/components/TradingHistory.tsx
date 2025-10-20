@@ -154,7 +154,7 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                 <span className="text-xs font-medium text-green-400/80 uppercase tracking-wide">Win Rate</span>
                 <div className="p-1.5 bg-green-500/10 rounded-lg">
                   <HiTrendingUp className="w-4 h-4 text-green-400" />
-                </div>
+                  </div>
                 </div>
               <div className="text-2xl font-bold text-white mb-1">{stats.winRate.toFixed(1)}%</div>
               <div className="flex items-center gap-1.5">
@@ -231,7 +231,7 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
               <span className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded-md font-medium">
                 {completedTrades.length}
                     </span>
-            </div>
+                  </div>
             {completedTrades.length > 0 && (
               <div className="text-xs text-gray-500">
                 Click to see entry/exit details

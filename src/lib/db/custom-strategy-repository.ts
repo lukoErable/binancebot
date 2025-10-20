@@ -32,8 +32,8 @@ export class CustomStrategyRepository {
     const timeframe = config.timeframe || '1m';
     
     await db.query(`
-      INSERT INTO strategies (name, type, is_active, config, timeframe)
-      VALUES ($1, $2, $3, $4::jsonb, $5)
+      INSERT INTO strategies (name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
+      VALUES ($1, $2, $3, $4::jsonb, $5, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (name, timeframe) 
       DO UPDATE SET 
         type = $2,
@@ -41,7 +41,7 @@ export class CustomStrategyRepository {
         updated_at = CURRENT_TIMESTAMP
     `, [config.name, config.strategyType, false, configJson, timeframe]);
     
-    console.log(`✅ Custom strategy "${config.name}" [${timeframe}] saved to database`);
+    console.log(`✅ Custom strategy "${config.name}" [${timeframe}] saved to database (activated_at=NULL, total_active_time=0)`);
   }
   
   /**

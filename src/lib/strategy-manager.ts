@@ -25,7 +25,7 @@ export class StrategyManager {
     // Load custom strategies from database FIRST
     this.loadCustomStrategies().then(() => {
       // Then load strategy states (is_active, activated_at, configs)
-      this.loadFromDatabase();
+    this.loadFromDatabase();
     });
   }
 
@@ -140,7 +140,7 @@ export class StrategyManager {
       for (const [key, strategyData] of this.strategies) {
         const { name } = this.parseStrategyKey(key);
         try {
-          if ('restoreFromDatabase' in strategyData.strategy) {
+            if ('restoreFromDatabase' in strategyData.strategy) {
             await (strategyData.strategy as any).restoreFromDatabase();
           }
         } catch (error) {
@@ -425,7 +425,7 @@ export class StrategyManager {
           }
           
           // Execute trade directly
-          strategyData.strategy.executeTrade(signal);
+              strategyData.strategy.executeTrade(signal);
         } else {
           strategyData.strategy.executeTrade(signal);
         }
