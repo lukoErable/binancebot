@@ -1093,7 +1093,7 @@ export default function StrategyPanel({
 
   const handleResetStrategy = async (strategyName: string, timeframe: string) => {
     try {
-      const response = await fetch('/api/trading', {
+      const response = await fetch('/api/trading-shared', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -1126,7 +1126,7 @@ export default function StrategyPanel({
       }
 
       // First reset the strategy (delete all trades and data for this timeframe)
-      const resetResponse = await fetch('/api/trading', {
+      const resetResponse = await fetch('/api/trading-shared', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 

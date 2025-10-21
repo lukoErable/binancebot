@@ -8,19 +8,20 @@ export class CompletedTradeRepository {
   /**
    * Save a completed trade (entry + exit)
    */
-  static async saveCompletedTrade(trade: CompletedTrade): Promise<void> {
+  static async saveCompletedTrade(trade: CompletedTrade, userId: number = 1): Promise<void> {
     try {
       const query = `
         INSERT INTO completed_trades (
-          strategy_name, strategy_type, position_type,
+          user_id, strategy_name, strategy_type, position_type,
           entry_price, entry_time, entry_reason,
           exit_price, exit_time, exit_reason,
           quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING id
       `;
 
       const values = [
+        userId,
         trade.strategyName,
         trade.strategyType,
         trade.type,
@@ -128,7 +129,7 @@ export class CompletedTradeRepository {
    * Get all completed trades
    * @param limit - Maximum number of trades to return (0 = no limit, returns ALL trades)
    */
-  static async getAllCompletedTrades(limit: number = 100): Promise<CompletedTrade[]> {
+  static async getAllCompletedTrades(limit: number = 100, userId: number = 1): Promise<CompletedTrade[]> {
     try {
       const query = limit > 0 
         ? `
@@ -138,8 +139,9 @@ export class CompletedTradeRepository {
             exit_price, exit_time, exit_reason,
             quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
           FROM completed_trades
+          WHERE user_id = $1
           ORDER BY exit_time DESC
-          LIMIT $1
+          LIMIT $2
         `
         : `
           SELECT 
@@ -148,12 +150,13 @@ export class CompletedTradeRepository {
             exit_price, exit_time, exit_reason,
             quantity, pnl, pnl_percent, fees, duration, is_win, timeframe
           FROM completed_trades
+          WHERE user_id = $1
           ORDER BY exit_time DESC
         `;
       
       const result = limit > 0 
-        ? await pool.query(query, [limit])
-        : await pool.query(query);
+        ? await pool.query(query, [userId, limit])
+        : await pool.query(query, [userId]);
       
       return result.rows.map((row: any) => ({
         id: row.id,

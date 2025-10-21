@@ -13,7 +13,7 @@ export class CustomStrategyRepository {
   /**
    * Save a custom strategy configuration
    */
-  static async saveCustomStrategy(config: CustomStrategyConfig): Promise<void> {
+  static async saveCustomStrategy(config: CustomStrategyConfig, userId: number = 1): Promise<void> {
     // Serialize the entire config as JSON
     const configJson = JSON.stringify({
       description: config.description,
@@ -36,14 +36,14 @@ export class CustomStrategyRepository {
     const timeframe = config.timeframe || '1m';
     
     await db.query(`
-      INSERT INTO strategies (name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
-      VALUES ($1, $2, $3, $4::jsonb, $5, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      ON CONFLICT (name, timeframe) 
+      INSERT INTO strategies (user_id, name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (user_id, name, timeframe) 
       DO UPDATE SET 
-        type = $2,
-        config = $4::jsonb,
+        type = $3,
+        config = $5::jsonb,
         updated_at = CURRENT_TIMESTAMP
-    `, [config.name, config.strategyType, false, configJson, timeframe]);
+    `, [userId, config.name, config.strategyType, false, configJson, timeframe]);
     
     // Clear cache after saving
     this.clearCache();
@@ -102,7 +102,7 @@ export class CustomStrategyRepository {
   /**
    * Get all custom strategies (with caching)
    */
-  static async getAllCustomStrategies(useCache: boolean = true): Promise<CustomStrategyConfig[]> {
+  static async getAllCustomStrategies(useCache: boolean = true, userId: number = 1): Promise<CustomStrategyConfig[]> {
     // Check cache first
     const now = Date.now();
     if (useCache && this.cache && (now - this.cacheTimestamp) < this.CACHE_TTL) {
@@ -110,7 +110,7 @@ export class CustomStrategyRepository {
       return this.cache;
     }
     
-    const result = await db.query('SELECT * FROM strategies WHERE type = $1', ['CUSTOM']);
+    const result = await db.query('SELECT * FROM strategies WHERE type = $1 AND user_id = $2', ['CUSTOM', userId]);
     
     const strategies: CustomStrategyConfig[] = [];
     

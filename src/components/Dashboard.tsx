@@ -18,6 +18,7 @@ import StrategyBuilder from './StrategyBuilder';
 import StrategyPanel from './StrategyPanel';
 import TimeframeComparison from './TimeframeComparison';
 import TradingHistory from './TradingHistory';
+import UserAuth from './UserAuth';
 
 // Extend Window interface for tradingEventSource
 declare global {
@@ -81,7 +82,7 @@ export default function Dashboard() {
     }, 15000); // 15 seconds max wait for first message
     
     try {
-      const eventSource = new EventSource(`/api/trading?action=start&timeframe=${tf}&trading=${tm}`);
+      const eventSource = new EventSource(`/api/trading-shared?action=start&timeframe=${tf}&trading=${tm}`);
 
       eventSource.onmessage = (event) => {
         try {
@@ -154,7 +155,7 @@ export default function Dashboard() {
         window.tradingEventSource = undefined;
       }
 
-      await fetch('/api/trading?action=stop');
+      await fetch('/api/trading-shared?action=stop');
       setIsConnected(false);
       
       // Only clear data if not restarting (for smooth transition when adding new strategies)
@@ -170,7 +171,7 @@ export default function Dashboard() {
 
   const handleToggleStrategy = async (strategyName: string) => {
     try {
-      await fetch(`/api/trading?action=toggleStrategy&strategyName=${encodeURIComponent(strategyName)}&timeframe=${selectedTimeframe}`);
+      await fetch(`/api/trading-shared?action=toggleStrategy&strategyName=${encodeURIComponent(strategyName)}&timeframe=${selectedTimeframe}`);
       // No need to refresh - data comes via SSE
     } catch (error) {
       console.error('Error toggling strategy:', error);
@@ -327,7 +328,7 @@ export default function Dashboard() {
     
     // Informer le backend en arrière-plan (ne pas attendre)
     if (isConnected) {
-      fetch(`/api/trading?action=changeTimeframe&timeframe=${timeframe}`)
+      fetch(`/api/trading-shared?action=changeTimeframe&timeframe=${timeframe}`)
         .then(() => {
           // Les nouvelles données arriveront via SSE et mettront à jour le cache
           setIsChangingTimeframe(false);
@@ -2030,8 +2031,11 @@ export default function Dashboard() {
             )}
           </div>
           
-          {/* Right: Monitoring Status */}
+          {/* Right: User Auth & Monitoring Status */}
           <div className="flex items-center justify-end gap-4">
+            {/* User Authentication */}
+            <UserAuth />
+            
             {isConnecting && (
               <div className="bg-gradient-to-r from-sky-500 to-cyan-500 text-white px-4 py-2 rounded text-sm font-medium shadow-lg shadow-sky-500/30">
                 ⏳ Connecting...

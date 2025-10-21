@@ -8,33 +8,35 @@ class OpenPositionRepository {
   static async saveOpenPosition(
     strategyName: string,
     position: Position,
-    timeframe: string = '1m'
+    timeframe: string = '1m',
+    userId: number = 1
   ): Promise<void> {
     if (position.type === 'NONE') {
       // If position is NONE, delete any existing open position
-      await this.deleteOpenPosition(strategyName, timeframe);
+      await this.deleteOpenPosition(strategyName, timeframe, userId);
       return;
     }
 
     try {
       const query = `
         INSERT INTO open_positions (
-          strategy_name, position_type, entry_price, entry_time, 
+          user_id, strategy_name, position_type, entry_price, entry_time, 
           quantity, unrealized_pnl, unrealized_pnl_percent, timeframe, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
-        ON CONFLICT (strategy_name, timeframe)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, strategy_name, timeframe)
         DO UPDATE SET
-          position_type = $2,
-          entry_price = $3,
-          entry_time = $4,
-          quantity = $5,
-          unrealized_pnl = $6,
-          unrealized_pnl_percent = $7,
+          position_type = $3,
+          entry_price = $4,
+          entry_time = $5,
+          quantity = $6,
+          unrealized_pnl = $7,
+          unrealized_pnl_percent = $8,
           updated_at = CURRENT_TIMESTAMP
       `;
 
       await pool.query(query, [
+        userId,
         strategyName,
         position.type,
         position.entryPrice,
@@ -55,14 +57,14 @@ class OpenPositionRepository {
   /**
    * Get open position for a strategy on a specific timeframe
    */
-  static async getOpenPosition(strategyName: string, timeframe: string = '1m'): Promise<Position | null> {
+  static async getOpenPosition(strategyName: string, timeframe: string = '1m', userId: number = 1): Promise<Position | null> {
     try {
       const query = `
         SELECT * FROM open_positions
-        WHERE strategy_name = $1 AND timeframe = $2
+        WHERE strategy_name = $1 AND timeframe = $2 AND user_id = $3
       `;
 
-      const result = await pool.query(query, [strategyName, timeframe]);
+      const result = await pool.query(query, [strategyName, timeframe, userId]);
 
       if (result.rows.length === 0) {
         return null;
@@ -86,10 +88,10 @@ class OpenPositionRepository {
   /**
    * Delete open position for a strategy on a specific timeframe
    */
-  static async deleteOpenPosition(strategyName: string, timeframe: string = '1m'): Promise<void> {
+  static async deleteOpenPosition(strategyName: string, timeframe: string = '1m', userId: number = 1): Promise<void> {
     try {
-      const query = `DELETE FROM open_positions WHERE strategy_name = $1 AND timeframe = $2`;
-      await pool.query(query, [strategyName, timeframe]);
+      const query = `DELETE FROM open_positions WHERE strategy_name = $1 AND timeframe = $2 AND user_id = $3`;
+      await pool.query(query, [strategyName, timeframe, userId]);
       console.log(`🗑️ Deleted open position for "${strategyName}" [${timeframe}]`);
     } catch (error) {
       console.error(`❌ Error deleting open position for "${strategyName}" [${timeframe}]:`, error);
@@ -100,10 +102,10 @@ class OpenPositionRepository {
   /**
    * Get all open positions (key format: "strategyName:timeframe")
    */
-  static async getAllOpenPositions(): Promise<Map<string, Position>> {
+  static async getAllOpenPositions(userId: number = 1): Promise<Map<string, Position>> {
     try {
-      const query = `SELECT * FROM open_positions`;
-      const result = await pool.query(query);
+      const query = `SELECT * FROM open_positions WHERE user_id = $1`;
+      const result = await pool.query(query, [userId]);
 
       const positions = new Map<string, Position>();
       
