@@ -16,6 +16,8 @@ export class SharedMultiTimeframeWebSocketManager {
   private primaryTimeframe: string = '1m';
   private updateInterval: NodeJS.Timeout | null = null;
   private isActive: boolean = false;
+  private hasLoggedStrategies: boolean = false;
+  private strategyManagerRef: any = null; // Store reference to avoid repeated imports
   
   constructor(
     userId: string,
@@ -39,21 +41,19 @@ export class SharedMultiTimeframeWebSocketManager {
     // Create user session
     this.userSession.createSession(this.userId, primaryTimeframe);
     
-    // Ensure StrategyManager is initialized
+    // Ensure StrategyManager is initialized and has loaded strategies
     const { StrategyManager } = await import('./strategy-manager');
     let strategyManager = StrategyManager.getGlobalInstance();
     
     if (!strategyManager) {
-      console.log(`⚠️  [USER ${this.userId}] StrategyManager not found, creating singleton...`);
-      // Force creation of singleton by importing and waiting
-      strategyManager = new StrategyManager();
-      // Wait for strategies to load
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      strategyManager = StrategyManager.getGlobalInstance();
-    } else {
-      console.log(`✅ [USER ${this.userId}] StrategyManager found, reloading data...`);
-      // Force reload to ensure fresh data
-      await strategyManager.reloadAllData();
+      console.log(`⚠️  [USER ${this.userId}] StrategyManager not found, waiting for daemon...`);
+      // Wait for daemon to initialize StrategyManager
+      let retries = 0;
+      while (!strategyManager && retries < 10) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        strategyManager = StrategyManager.getGlobalInstance();
+        retries++;
+      }
     }
     
     if (!strategyManager) {
@@ -63,8 +63,28 @@ export class SharedMultiTimeframeWebSocketManager {
       return;
     }
     
-    // Find timeframes with active strategies
-    const allPerformances = strategyManager.getAllPerformances();
+    // Wait for strategies to be loaded
+    let allPerformances = strategyManager.getAllPerformances();
+    let waitCount = 0;
+    while (allPerformances.length === 0 && waitCount < 20) {
+      console.log(`⏳ [USER ${this.userId}] Waiting for strategies to load... (${waitCount + 1}/20)`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      allPerformances = strategyManager.getAllPerformances();
+      waitCount++;
+    }
+    
+    if (allPerformances.length === 0) {
+      console.error(`❌ [USER ${this.userId}] No strategies loaded after 10 seconds!`);
+      // Force reload
+      await strategyManager.reloadAllData();
+      allPerformances = strategyManager.getAllPerformances();
+    }
+    
+    console.log(`✅ [USER ${this.userId}] StrategyManager ready with ${allPerformances.length} strategies`);
+    
+    // Store reference for later use
+    this.strategyManagerRef = strategyManager;
+    
     const timeframesWithActiveStrategies = new Set<string>();
     
     allPerformances.forEach(perf => {
@@ -82,6 +102,12 @@ export class SharedMultiTimeframeWebSocketManager {
     for (const tf of timeframesWithActiveStrategies) {
       await this.subscribeToTimeframe(tf);
     }
+    
+    // Wait a bit more to ensure all data is ready
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Send initial state immediately
+    this.sendCombinedState();
     
     // Start sending periodic updates to this user
     this.startPeriodicUpdates();
@@ -122,15 +148,32 @@ export class SharedMultiTimeframeWebSocketManager {
     const sharedWS = SharedBinanceWebSocket.getInstance(this.primaryTimeframe);
     const primaryData = sharedWS.getCurrentData();
     
-    if (!primaryData) return;
+    if (!primaryData) {
+      console.log(`⚠️  [USER ${this.userId}] No data from WebSocket ${this.primaryTimeframe}`);
+      return;
+    }
     
     // Get strategy performances for THIS user
-    const strategyManager = getGlobalStrategyManager();
+    // Use stored reference instead of calling getGlobalStrategyManager() which may return null in SSE context
     let strategyPerformances: any[] = [];
     
-    if (strategyManager) {
+    if (this.strategyManagerRef) {
       // Get ALL performances (user-specific filtering would go here)
-      strategyPerformances = strategyManager.getAllPerformances();
+      strategyPerformances = this.strategyManagerRef.getAllPerformances();
+      
+      // Debug log first time
+      if (strategyPerformances.length > 0 && !this.hasLoggedStrategies) {
+        console.log(`📊 [USER ${this.userId}] Sending ${strategyPerformances.length} strategies to frontend`);
+        this.hasLoggedStrategies = true;
+      }
+    } else {
+      // Fallback to global getter if reference not set
+      const strategyManager = getGlobalStrategyManager();
+      if (strategyManager) {
+        strategyPerformances = strategyManager.getAllPerformances();
+      } else {
+        console.log(`⚠️  [USER ${this.userId}] No StrategyManager available`);
+      }
     }
     
     // Build state for this user with ALL indicators from shared data

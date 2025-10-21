@@ -1,8 +1,8 @@
 import SharedMultiTimeframeWebSocketManager from '@/lib/shared-multi-websocket-manager';
 import UserSessionManager from '@/lib/user-session-manager';
 import { NextRequest } from 'next/server';
-// Initialize StrategyManager at server startup
-import '@/lib/init-strategy-manager';
+// Initialize Trading Daemon (24/7 background trading)
+import { tradingDaemon } from '@/lib/trading-daemon';
 
 // Map to track active user managers
 const activeManagers = new Map<string, SharedMultiTimeframeWebSocketManager>();
@@ -20,6 +20,16 @@ export async function GET(request: NextRequest) {
 
   // === SSE STREAMING ===
   if (action === 'start') {
+    // Ensure daemon is running
+    if (!tradingDaemon.isActive()) {
+      console.log('⚠️  Trading Daemon not running, starting now...');
+      try {
+        await tradingDaemon.start();
+      } catch (error) {
+        console.error('❌ Failed to start daemon:', error);
+      }
+    }
+    
     const encoder = new TextEncoder();
     let isClosed = false;
 

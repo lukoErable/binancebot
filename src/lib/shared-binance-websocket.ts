@@ -243,6 +243,9 @@ class SharedBinanceWebSocket {
    * Broadcast data to all subscribers
    */
   private broadcast(data: WebSocketData): void {
+    // Always update latestData, even with no subscribers (for daemon)
+    this.latestData = data;
+    
     if (this.subscribers.size === 0) return;
     
     this.subscribers.forEach(callback => {
