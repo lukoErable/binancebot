@@ -14,27 +14,27 @@ const DEFAULT_STRATEGIES: Omit<CustomStrategyConfig, 'timeframe'>[] = [
     strategyLogic: 'BOTH',
     longEntryConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'rsi', comparison: '<', value: 30 }
+        { type: 'comparison', indicator: 'rsi', operator: 'LT', value: 30 }
       ],
-      logic: 'AND'
+      operator: 'AND'
     },
     shortEntryConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'rsi', comparison: '>', value: 70 }
+        { type: 'comparison', indicator: 'rsi', operator: 'GT', value: 70 }
       ],
-      logic: 'AND'
+      operator: 'AND'
     },
     longExitConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'rsi', comparison: '>', value: 50 }
+        { type: 'comparison', indicator: 'rsi', operator: 'GT', value: 50 }
       ],
-      logic: 'OR'
+      operator: 'OR'
     },
     shortExitConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'rsi', comparison: '<', value: 50 }
+        { type: 'comparison', indicator: 'rsi', operator: 'LT', value: 50 }
       ],
-      logic: 'OR'
+      operator: 'OR'
     },
     profitTargetPercent: 2,
     stopLossPercent: 1,
@@ -53,27 +53,27 @@ const DEFAULT_STRATEGIES: Omit<CustomStrategyConfig, 'timeframe'>[] = [
     strategyLogic: 'BOTH',
     longEntryConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'ema12', comparison: '>', indicatorCompare: 'ema26' }
+        { type: 'comparison', indicator: 'ema12', operator: 'GT', value: 'ema26' }
       ],
-      logic: 'AND'
+      operator: 'AND'
     },
     shortEntryConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'ema12', comparison: '<', indicatorCompare: 'ema26' }
+        { type: 'comparison', indicator: 'ema12', operator: 'LT', value: 'ema26' }
       ],
-      logic: 'AND'
+      operator: 'AND'
     },
     longExitConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'ema12', comparison: '<', indicatorCompare: 'ema26' }
+        { type: 'comparison', indicator: 'ema12', operator: 'LT', value: 'ema26' }
       ],
-      logic: 'OR'
+      operator: 'OR'
     },
     shortExitConditions: {
       conditions: [
-        { type: 'indicator', indicator: 'ema12', comparison: '>', indicatorCompare: 'ema26' }
+        { type: 'comparison', indicator: 'ema12', operator: 'GT', value: 'ema26' }
       ],
-      logic: 'OR'
+      operator: 'OR'
     },
     profitTargetPercent: 1.5,
     stopLossPercent: 0.75,
@@ -92,29 +92,29 @@ const DEFAULT_STRATEGIES: Omit<CustomStrategyConfig, 'timeframe'>[] = [
     strategyLogic: 'BOTH',
     longEntryConditions: {
       conditions: [
-        { type: 'price', comparison: '>', indicatorCompare: 'ema50' },
-        { type: 'indicator', indicator: 'rsi', comparison: '>', value: 50 }
+        { type: 'comparison', indicator: 'price', operator: 'GT', value: 'ema50' },
+        { type: 'comparison', indicator: 'rsi', operator: 'GT', value: 50 }
       ],
-      logic: 'AND'
+      operator: 'AND'
     },
     shortEntryConditions: {
       conditions: [
-        { type: 'price', comparison: '<', indicatorCompare: 'ema50' },
-        { type: 'indicator', indicator: 'rsi', comparison: '<', value: 50 }
+        { type: 'comparison', indicator: 'price', operator: 'LT', value: 'ema50' },
+        { type: 'comparison', indicator: 'rsi', operator: 'LT', value: 50 }
       ],
-      logic: 'AND'
+      operator: 'AND'
     },
     longExitConditions: {
       conditions: [
-        { type: 'price', comparison: '<', indicatorCompare: 'ema50' }
+        { type: 'comparison', indicator: 'price', operator: 'LT', value: 'ema50' }
       ],
-      logic: 'OR'
+      operator: 'OR'
     },
     shortExitConditions: {
       conditions: [
-        { type: 'price', comparison: '>', indicatorCompare: 'ema50' }
+        { type: 'comparison', indicator: 'price', operator: 'GT', value: 'ema50' }
       ],
-      logic: 'OR'
+      operator: 'OR'
     },
     profitTargetPercent: 3,
     stopLossPercent: 1.5,

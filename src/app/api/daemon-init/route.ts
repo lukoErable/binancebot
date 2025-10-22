@@ -17,7 +17,7 @@ initializeTradingDaemon().then(() => {
  * GET endpoint to check daemon status
  */
 export async function GET() {
-  const stats = tradingDaemon.getStats();
+  const stats = await tradingDaemon.getStats();
   const isActive = tradingDaemon.isActive();
   
   const uptimeMinutes = Math.floor(stats.uptime / 1000 / 60);

@@ -30,6 +30,10 @@ export interface CustomStrategyConfig {
   stopLossPercent: number;
   maxPositionTime: number; // milliseconds
   
+  // Dynamic stop-loss based on ATR (for swing trading)
+  useDynamicStopLoss?: boolean; // If true, use ATR-based stop-loss instead of percentage
+  atrMultiplier?: number; // ATR multiplier for stop-loss (default: 2.0)
+  
   // Position sizing
   positionSize: number;
   
@@ -117,10 +121,38 @@ export class CustomStrategy {
     
     // === CHECK EXIT CONDITIONS ===
     if (this.currentPosition.type !== 'NONE') {
-      // Check stop loss
-      if (this.currentPosition.unrealizedPnLPercent <= -this.config.stopLossPercent) {
-        return this.closePosition(currentPrice, indicators, 
-          `Stop Loss: ${this.currentPosition.unrealizedPnLPercent.toFixed(2)}%`);
+      // Check stop loss (dynamic ATR-based or percentage-based)
+      let shouldStopLoss = false;
+      let stopLossReason = '';
+      
+      if (this.config.useDynamicStopLoss && this.config.atrMultiplier) {
+        // Dynamic ATR-based stop-loss
+        const atrValue = indicators.atr14;
+        const atrStopDistance = atrValue * this.config.atrMultiplier;
+        
+        if (this.currentPosition.type === 'LONG') {
+          const atrStopPrice = this.currentPosition.entryPrice - atrStopDistance;
+          if (currentPrice <= atrStopPrice) {
+            shouldStopLoss = true;
+            stopLossReason = `ATR Stop Loss: ${currentPrice.toFixed(2)} <= ${atrStopPrice.toFixed(2)} (ATR: ${atrValue.toFixed(2)} x ${this.config.atrMultiplier})`;
+          }
+        } else if (this.currentPosition.type === 'SHORT') {
+          const atrStopPrice = this.currentPosition.entryPrice + atrStopDistance;
+          if (currentPrice >= atrStopPrice) {
+            shouldStopLoss = true;
+            stopLossReason = `ATR Stop Loss: ${currentPrice.toFixed(2)} >= ${atrStopPrice.toFixed(2)} (ATR: ${atrValue.toFixed(2)} x ${this.config.atrMultiplier})`;
+          }
+        }
+      } else {
+        // Traditional percentage-based stop-loss
+        if (this.currentPosition.unrealizedPnLPercent <= -this.config.stopLossPercent) {
+          shouldStopLoss = true;
+          stopLossReason = `Stop Loss: ${this.currentPosition.unrealizedPnLPercent.toFixed(2)}%`;
+        }
+      }
+      
+      if (shouldStopLoss) {
+        return this.closePosition(currentPrice, indicators, stopLossReason);
       }
       
       // Check take profit

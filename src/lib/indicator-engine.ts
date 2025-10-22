@@ -1,15 +1,17 @@
 import { Candle } from '@/types/trading';
 import {
-    ADX,
-    ATR,
-    BollingerBands,
-    CCI,
-    EMA,
-    MACD,
-    OBV,
-    RSI,
-    Stochastic
+  ADX,
+  ATR,
+  BollingerBands,
+  CCI,
+  EMA,
+  MACD,
+  OBV,
+  RSI,
+  Stochastic
 } from 'technicalindicators';
+import AdvancedIndicatorCalculator from './advanced-indicator-calculator';
+import { AdvancedIndicatorValues } from './advanced-indicators';
 
 /**
  * Centralized Indicator Engine
@@ -17,15 +19,8 @@ import {
  * Avoids duplicate calculations across multiple strategies
  */
 
-export interface IndicatorValues {
-  // Price-based
-  price: number;
-  open: number;
-  high: number;
-  low: number;
-  volume: number;
-  
-  // Moving Averages
+export interface IndicatorValues extends AdvancedIndicatorValues {
+  // Legacy indicators (kept for backward compatibility)
   ema12: number;
   ema26: number;
   ema50: number;
@@ -95,6 +90,10 @@ export interface IndicatorValues {
   isOversold: boolean; // RSI < 30
   isOverbought: boolean; // RSI > 70
   
+  // RSI Crossovers (for swing trading)
+  isRSICrossedAbove30: boolean; // RSI crossed above 30 (bullish signal)
+  isRSICrossedBelow70: boolean; // RSI crossed below 70 (bearish signal)
+  
   // MACD Signals
   isMACDBullish: boolean; // MACD > Signal
   isMACDBearish: boolean; // MACD < Signal
@@ -144,6 +143,33 @@ export class IndicatorEngine {
     if (candles.length < 200) {
       throw new Error(`Need at least 200 candles, got ${candles.length}`);
     }
+    
+    // Calculate advanced indicators
+    const advancedIndicators = AdvancedIndicatorCalculator.calculate(candles);
+    
+    // Debug: Check advanced indicators calculation
+    // console.log(`🔍 [IndicatorEngine] Advanced indicators calculated:`, {
+    //   hasAdvancedIndicators: !!advancedIndicators,
+    //   advancedKeys: advancedIndicators ? Object.keys(advancedIndicators).length : 0,
+    //   sampleValues: {
+    //     sma20: advancedIndicators?.sma20,
+    //     ema10: advancedIndicators?.ema10,
+    //     rsi: advancedIndicators?.rsi,
+    //     macd: advancedIndicators?.macd,
+    //     bbUpper: advancedIndicators?.bbUpper,
+    //     atr: advancedIndicators?.atr,
+    //     stochK: advancedIndicators?.stochK,
+    //     adx: advancedIndicators?.adx,
+    //     cci: advancedIndicators?.cci,
+    //     obv: advancedIndicators?.obv,
+    //     vwap: advancedIndicators?.vwap,
+    //     tenkanSen: advancedIndicators?.tenkanSen,
+    //     kijunSen: advancedIndicators?.kijunSen,
+    //     senkouSpanA: advancedIndicators?.senkouSpanA,
+    //     senkouSpanB: advancedIndicators?.senkouSpanB,
+    //     gatorOscillator: advancedIndicators?.gatorOscillator
+    //   }
+    // });
     
     const currentCandle = candles[candles.length - 1];
     const previousCandle = candles.length > 1 ? candles[candles.length - 2] : currentCandle;
@@ -238,6 +264,11 @@ export class IndicatorEngine {
     const isOversold = rsi < 30;
     const isOverbought = rsi > 70;
     
+    // === RSI CROSSOVERS (for swing trading) ===
+    const prevRSI = this.lastIndicators?.rsi || 50;
+    const isRSICrossedAbove30 = !this.lastIndicators || (prevRSI <= 30 && rsi > 30);
+    const isRSICrossedBelow70 = !this.lastIndicators || (prevRSI >= 70 && rsi < 70);
+    
     // === MACD SIGNALS ===
     const isMACDBullish = macdResult.macd > macdResult.signal;
     const isMACDBearish = macdResult.macd < macdResult.signal;
@@ -317,8 +348,11 @@ export class IndicatorEngine {
       upperWick > (bodySize * 2) &&
       lowerWick < (bodySize * 0.5);
     
-    // Build result
+    // Build result - merge advanced indicators with legacy indicators
     const indicators: IndicatorValues = {
+      // Advanced indicators (from AdvancedIndicatorCalculator)
+      ...advancedIndicators,
+      
       // Price
       price: currentCandle.close,
       open: currentCandle.open,
@@ -393,6 +427,10 @@ export class IndicatorEngine {
       // Momentum
       isOversold,
       isOverbought,
+      
+      // RSI Crossovers
+      isRSICrossedAbove30,
+      isRSICrossedBelow70,
       
       // MACD Signals
       isMACDBullish,

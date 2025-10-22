@@ -237,7 +237,7 @@ export async function POST(request: NextRequest) {
           message: `Strategy "${strategyName}" [${tf}] toggle failed, but state will refresh` 
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(`❌ [POST] Error toggling strategy "${strategyName}":`, error);
       return Response.json({ 
         success: false, 

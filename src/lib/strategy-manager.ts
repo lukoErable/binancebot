@@ -1,5 +1,5 @@
 import { Candle, StrategyPerformance } from '@/types/trading';
-import { CustomStrategy } from './custom-strategy';
+import { CustomStrategy, CustomStrategyConfig } from './custom-strategy';
 import CustomStrategyRepository from './db/custom-strategy-repository';
 import StrategyRepository from './db/strategy-repository';
 
@@ -282,32 +282,6 @@ export class StrategyManager {
     }
   }
 
-  /**
-   * Add a new strategy for a specific timeframe
-   */
-  addStrategy(
-    name: string,
-    strategy: CustomStrategy,
-    type: 'CUSTOM',
-    timeframe: string = '1m',
-    isActive: boolean = true
-  ): void {
-    const key = this.getStrategyKey(name, timeframe);
-    this.strategies.set(key, { strategy, type, isActive, timeframe });
-    console.log(`✅ Strategy "${name}" [${timeframe}] added (${type})`);
-  }
-
-  /**
-   * Remove a strategy from a specific timeframe
-   */
-  removeStrategy(name: string, timeframe: string = '1m'): boolean {
-    const key = this.getStrategyKey(name, timeframe);
-    const removed = this.strategies.delete(key);
-    if (removed) {
-      console.log(`🗑️ Strategy "${name}" [${timeframe}] removed`);
-    }
-    return removed;
-  }
 
   /**
    * Toggle strategy active state for a specific timeframe
@@ -358,18 +332,6 @@ export class StrategyManager {
     return newState;
   }
 
-  /**
-   * Synchronous version for backward compatibility
-   */
-  toggleStrategySync(name: string, timeframe: string = '1m'): boolean {
-    this.toggleStrategy(name, timeframe).catch(err => {
-      console.error('Error toggling strategy:', err);
-    });
-    
-    const key = this.getStrategyKey(name, timeframe);
-    const strategyData = this.strategies.get(key);
-    return strategyData?.isActive || false;
-  }
 
   /**
    * Update strategy configuration for a specific timeframe
@@ -465,12 +427,6 @@ export class StrategyManager {
     }
   }
 
-  /**
-   * Legacy method: Analyze all strategies (defaults to 1m timeframe for backward compatibility)
-   */
-  async analyzeAllStrategies(candles: Candle[]): Promise<void> {
-    await this.analyzeStrategiesForTimeframe(candles, '1m');
-  }
 
   /**
    * Update all strategies with current market price for a specific timeframe
@@ -484,12 +440,6 @@ export class StrategyManager {
     });
   }
 
-  /**
-   * Legacy method: Update all strategies (defaults to 1m timeframe for backward compatibility)
-   */
-  updateAllStrategiesWithCurrentPrice(currentPrice: number): void {
-    this.updateStrategiesWithCurrentPrice(currentPrice, '1m');
-  }
 
   /**
    * Get performance of all strategies
@@ -536,25 +486,6 @@ export class StrategyManager {
     return performances;
   }
 
-  /**
-   * Get best performing strategy
-   */
-  getBestStrategy(): { name: string; performance: StrategyPerformance } | null {
-    const performances = this.getAllPerformances();
-    if (performances.length === 0) return null;
-
-    let best = performances[0];
-    let bestName = Array.from(this.strategies.keys())[0];
-
-    performances.forEach((perf, index) => {
-      if (perf.totalPnL > best.totalPnL) {
-        best = perf;
-        bestName = Array.from(this.strategies.keys())[index];
-      }
-    });
-
-    return { name: bestName, performance: best };
-  }
 
   /**
    * Get strategy by name and timeframe
@@ -564,20 +495,6 @@ export class StrategyManager {
     return this.strategies.get(key)?.strategy;
   }
 
-  /**
-   * Get all strategy names (returns keys in "name:timeframe" format)
-   */
-  getStrategyNames(): string[] {
-    return Array.from(this.strategies.keys());
-  }
-
-  /**
-   * Clear all strategies
-   */
-  clearAll(): void {
-    this.strategies.clear();
-    console.log('🗑️ All strategies cleared');
-  }
 
   /**
    * Reset a specific strategy for a specific timeframe
@@ -620,6 +537,7 @@ export class StrategyManager {
           type: 'CUSTOM',
           isActive: wasActive,
           timeframe,
+          userEmail: strategyData.userEmail,
           activatedAt: wasActive ? Date.now() : null,
           totalActiveTime: 0
         });

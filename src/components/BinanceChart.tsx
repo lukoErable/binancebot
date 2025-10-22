@@ -1,9 +1,9 @@
 'use client';
 
 import { StrategyPerformance, StrategyState } from '@/types/trading';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { HiClock } from 'react-icons/hi';
-import { CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface BinanceChartProps {
   state: StrategyState;
@@ -224,35 +224,6 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
     return (candles[index].close - previousEMA) * multiplier + previousEMA;
   };
 
-  // Prepare signals for chart display (optimized for real-time performance)
-  // MUST be before any conditional returns to respect React Hooks rules
-  const prepareSignalsForChart = useMemo(() => {
-    if (!strategyPerformances || strategyPerformances.length === 0) {
-      return [];
-    }
-    
-    const allSignals: Array<{
-      timestamp: number;
-      candleIndex: number;
-      price: number;
-      type: string;
-      strategy: string;
-    }> = [];
-    
-    const seenSignals = new Set<string>();
-    
-    // Signals are no longer tracked - using completed trades and open positions only
-    
-    console.log('📍 Signals Debug:', {
-      totalPerformances: strategyPerformances?.length || 0,
-      selectedStrategy,
-      signalsFound: allSignals.length,
-      signalTypes: allSignals.map(s => s.type),
-      allSignals: allSignals.map(s => ({ type: s.type, price: s.price, strategy: s.strategy }))
-    });
-    
-    return allSignals;
-  }, [strategyPerformances, selectedStrategy, state.candles]);
 
   // Reduce data density for better readability
   const getDataReductionFactor = () => {
@@ -272,30 +243,9 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
     );
 
 
-  // Pre-index signals by candle for O(1) lookup
-  const signalsByCandle = useMemo(() => {
-    const map = new Map<number, Array<{ type: string; price: number }>>();
-    prepareSignalsForChart.forEach((signal: any) => {
-      if (!map.has(signal.candleIndex)) {
-        map.set(signal.candleIndex, []);
-      }
-      map.get(signal.candleIndex)!.push({ type: signal.type, price: signal.price });
-    });
-    
-    console.log(`📊 Signals indexed by candle:`, {
-      totalSignals: prepareSignalsForChart.length,
-      candlesWithSignals: map.size,
-      signalTypes: prepareSignalsForChart.map((s: any) => s.type)
-    });
-    
-    return map;
-  }, [prepareSignalsForChart]);
 
-  // Prepare chart data with calculated EMAs and signals
+  // Prepare chart data with calculated EMAs
   const chartData = filteredCandlesWithIndex.map(({ candle, originalIndex }, dataIndex) => {
-    // Get signals for this candle (O(1) lookup)
-    const candleSignals = signalsByCandle.get(originalIndex) || [];
-    
     return {
       time: new Date(candle.time).toLocaleTimeString('fr-FR', { 
         hour: '2-digit', 
@@ -311,27 +261,10 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       ema12: showEMA12 && originalIndex >= 11 ? calculateEMA(state.candles, 12, originalIndex) : null,
       ema26: showEMA26 && originalIndex >= 25 ? calculateEMA(state.candles, 26, originalIndex) : null,
       ema50: showEMA50 && originalIndex >= 49 ? calculateEMA(state.candles, 50, originalIndex) : null,
-      ema200: showEMA200 && originalIndex >= 199 ? calculateEMA(state.candles, 200, originalIndex) : null,
-      // Signal markers - separate by type for different colors
-      buySignal: candleSignals.find(s => s.type === 'BUY')?.price || null,
-      sellSignal: candleSignals.find(s => s.type === 'SELL')?.price || null,
-      closeLongSignal: candleSignals.find(s => s.type === 'CLOSE_LONG')?.price || null,
-      closeShortSignal: candleSignals.find(s => s.type === 'CLOSE_SHORT')?.price || null
+      ema200: showEMA200 && originalIndex >= 199 ? calculateEMA(state.candles, 200, originalIndex) : null
     };
   });
 
-  // Debug: Log chart data with signals
-  const buySignalsInChart = chartData.filter(d => d.buySignal !== null).length;
-  const sellSignalsInChart = chartData.filter(d => d.sellSignal !== null).length;
-  const closeLongSignalsInChart = chartData.filter(d => d.closeLongSignal !== null).length;
-  const closeShortSignalsInChart = chartData.filter(d => d.closeShortSignal !== null).length;
-  
-  console.log(`📈 Chart data signals:`, {
-    buySignals: buySignalsInChart,
-    sellSignals: sellSignalsInChart,
-    closeLongSignals: closeLongSignalsInChart,
-    closeShortSignals: closeShortSignalsInChart
-  });
 
   // Calculate price range for better scaling
   const prices = chartData.map(d => d.price);
@@ -353,10 +286,6 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
       ema26?: number;
       ema50?: number;
       ema200?: number;
-      buySignals?: Array<{ price: number; strategy: { name: string; type: string }; reason: string }>;
-      sellSignals?: Array<{ price: number; strategy: { name: string; type: string }; reason: string }>;
-      closeLongSignals?: Array<{ price: number; strategy: { name: string; type: string }; reason: string }>;
-      closeShortSignals?: Array<{ price: number; strategy: { name: string; type: string }; reason: string }>;
     };
   }
 
@@ -404,40 +333,6 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               </p>
             )}
             
-            {/* Trading Signals - Simplified display */}
-            {data && ((data as any).buySignal !== null || (data as any).sellSignal !== null || (data as any).closeLongSignal !== null || (data as any).closeShortSignal !== null) && (
-              <div className="mt-2 pt-2 border-t border-gray-600">
-                <p className="text-gray-300 font-semibold mb-2 text-xs">📊 Signals</p>
-                {(data as any).buySignal !== null && (data as any).buySignal !== undefined && (
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-3 h-3 rounded-full bg-green-500" />
-                    <span className="text-xs font-medium text-green-400">LONG</span>
-                    <span className="text-xs text-gray-400">@ ${(data as any).buySignal.toFixed(2)}</span>
-                  </div>
-                )}
-                {(data as any).sellSignal !== null && (data as any).sellSignal !== undefined && (
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-3 h-3 rounded-full bg-red-500" />
-                    <span className="text-xs font-medium text-red-400">SHORT</span>
-                    <span className="text-xs text-gray-400">@ ${(data as any).sellSignal.toFixed(2)}</span>
-              </div>
-            )}
-                {(data as any).closeLongSignal !== null && (data as any).closeLongSignal !== undefined && (
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-3 h-3 rounded-full bg-blue-500" />
-                    <span className="text-xs font-medium text-blue-400">EXIT LONG</span>
-                    <span className="text-xs text-gray-400">@ ${(data as any).closeLongSignal.toFixed(2)}</span>
-              </div>
-            )}
-                {(data as any).closeShortSignal !== null && (data as any).closeShortSignal !== undefined && (
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-3 h-3 rounded-full bg-orange-500" />
-                    <span className="text-xs font-medium text-orange-400">EXIT SHORT</span>
-                    <span className="text-xs text-gray-400">@ ${(data as any).closeShortSignal.toFixed(2)}</span>
-              </div>
-            )}
-              </div>
-            )}
           </div>
         </div>
       );
@@ -755,67 +650,6 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
                   />
                 )}
                 
-                {/* Trading Signals - Color-coded by type */}
-                {/* BUY signals - Green */}
-                <Scatter
-                  dataKey="buySignal"
-                  fill="#10B981"
-                  shape={(props: any) => {
-                    const { cx, cy } = props;
-                    if (!cx || !cy) return <g />;
-                    return (
-                      <g>
-                        <circle cx={cx} cy={cy} r={4} fill="#10B981" opacity={0.9} />
-                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
-                      </g>
-                    );
-                  }}
-                />
-                {/* SELL signals - Red */}
-                <Scatter
-                  dataKey="sellSignal"
-                  fill="#EF4444"
-                  shape={(props: any) => {
-                    const { cx, cy } = props;
-                    if (!cx || !cy) return <g />;
-                    return (
-                      <g>
-                        <circle cx={cx} cy={cy} r={4} fill="#EF4444" opacity={0.9} />
-                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
-                      </g>
-                    );
-                  }}
-                />
-                {/* CLOSE_LONG signals - Blue */}
-                <Scatter
-                  dataKey="closeLongSignal"
-                  fill="#3B82F6"
-                  shape={(props: any) => {
-                    const { cx, cy } = props;
-                    if (!cx || !cy) return <g />;
-                    return (
-                      <g>
-                        <circle cx={cx} cy={cy} r={4} fill="#3B82F6" opacity={0.9} />
-                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
-                      </g>
-                    );
-                  }}
-                />
-                {/* CLOSE_SHORT signals - Orange */}
-                <Scatter
-                  dataKey="closeShortSignal"
-                  fill="#F59E0B"
-                  shape={(props: any) => {
-                    const { cx, cy } = props;
-                    if (!cx || !cy) return <g />;
-                    return (
-                      <g>
-                        <circle cx={cx} cy={cy} r={4} fill="#F59E0B" opacity={0.9} />
-                        <circle cx={cx} cy={cy} r={2} fill="#fff" opacity={0.8} />
-                      </g>
-                    );
-                  }}
-                />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -1124,67 +958,6 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               />
             )}
             
-            {/* Trading Signals - Color-coded by type */}
-            {/* BUY signals - Green */}
-            <Scatter
-              dataKey="buySignal"
-              fill="#10B981"
-              shape={(props: any) => {
-                const { cx, cy } = props;
-                if (!cx || !cy) return <g />;
-                return (
-                  <g>
-                    <circle cx={cx} cy={cy} r={5} fill="#10B981" opacity={0.9} />
-                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
-                  </g>
-                );
-              }}
-            />
-            {/* SELL signals - Red */}
-            <Scatter
-              dataKey="sellSignal"
-              fill="#EF4444"
-              shape={(props: any) => {
-                const { cx, cy } = props;
-                if (!cx || !cy) return <g />;
-                return (
-                  <g>
-                    <circle cx={cx} cy={cy} r={5} fill="#EF4444" opacity={0.9} />
-                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
-                  </g>
-                );
-              }}
-            />
-            {/* CLOSE_LONG signals - Blue */}
-            <Scatter
-              dataKey="closeLongSignal"
-              fill="#3B82F6"
-              shape={(props: any) => {
-                const { cx, cy } = props;
-                if (!cx || !cy) return <g />;
-                return (
-                  <g>
-                    <circle cx={cx} cy={cy} r={5} fill="#3B82F6" opacity={0.9} />
-                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
-                  </g>
-                );
-              }}
-            />
-            {/* CLOSE_SHORT signals - Orange */}
-            <Scatter
-              dataKey="closeShortSignal"
-              fill="#F59E0B"
-              shape={(props: any) => {
-                const { cx, cy } = props;
-                if (!cx || !cy) return <g />;
-                return (
-                  <g>
-                    <circle cx={cx} cy={cy} r={5} fill="#F59E0B" opacity={0.9} />
-                    <circle cx={cx} cy={cy} r={2.5} fill="#fff" opacity={0.8} />
-                  </g>
-                );
-              }}
-            />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

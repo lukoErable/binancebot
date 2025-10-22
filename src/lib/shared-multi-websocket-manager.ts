@@ -223,6 +223,30 @@ export class SharedMultiTimeframeWebSocketManager {
     // Build state for this user with ALL indicators from shared data
     const ind = primaryData.indicators;
     
+    // Debug: Check if advanced indicators are present
+    // console.log(`🔍 [USER ${this.userId}] Advanced indicators debug:`, {
+    //   hasIndicators: !!ind,
+    //   indicatorsKeys: ind ? Object.keys(ind).length : 0,
+    //   sampleAdvanced: {
+    //     sma20: ind?.sma20,
+    //     ema12: ind?.ema12,
+    //     rsi: ind?.rsi,
+    //     macd: ind?.macd,
+    //     bbUpper: ind?.bbUpper,
+    //     atr: ind?.atr,
+    //     stochK: ind?.stochK,
+    //     adx: ind?.adx,
+    //     cci: ind?.cci,
+    //     obv: ind?.obv,
+    //     vwap: ind?.vwap,
+    //     tenkanSen: ind?.tenkanSen,
+    //     kijunSen: ind?.kijunSen,
+    //     senkouSpanA: ind?.senkouSpanA,
+    //     senkouSpanB: ind?.senkouSpanB,
+    //     gatorOscillator: ind?.gatorOscillator
+    //   }
+    // });
+    
     // Fallback for currentPrice if undefined
     const currentPrice = primaryData.currentPrice ?? 
                         (primaryData.candles && primaryData.candles.length > 0 ? 
@@ -232,80 +256,13 @@ export class SharedMultiTimeframeWebSocketManager {
       currentPrice: currentPrice,
       candles: primaryData.candles,
       
-      // Basic indicators (legacy)
-      rsi: ind.rsi,
-      ema12: ind.ema12,
-      ema26: ind.ema26,
-      ema50: ind.ema50,
-      ema200: ind.ema200,
+      // Legacy properties for backward compatibility
       ma7: ind.sma7,
       ma25: ind.sma25,
       ma99: ind.sma99,
       
-      // All IndicatorEngine values
-      ema100: ind.ema100,
-      sma7: ind.sma7,
-      sma25: ind.sma25,
-      sma50: ind.sma50,
-      sma99: ind.sma99,
-      sma200: ind.sma200,
-      rsi9: ind.rsi9,
-      rsi21: ind.rsi21,
-      macd: ind.macd,
-      macdSignal: ind.macdSignal,
-      macdHistogram: ind.macdHistogram,
-      atr: ind.atr,
-      atr14: ind.atr14,
-      atr21: ind.atr21,
-      bbUpper: ind.bbUpper,
-      bbMiddle: ind.bbMiddle,
-      bbLower: ind.bbLower,
-      bbWidth: ind.bbWidth,
-      bbPercent: ind.bbPercent,
-      stochK: ind.stochK,
-      stochD: ind.stochD,
-      adx: ind.adx,
-      cci: ind.cci,
-      obv: ind.obv,
-      vwap: ind.vwap,
-      volumeSMA20: ind.volumeSMA20,
-      volumeRatio: ind.volumeRatio,
-      
-      // Boolean indicators
-      isBullishTrend: ind.isBullishTrend,
-      isBearishTrend: ind.isBearishTrend,
-      isUptrend: ind.isUptrend,
-      isDowntrend: ind.isDowntrend,
-      isUptrendConfirmed3: ind.isUptrendConfirmed3,
-      isDowntrendConfirmed3: ind.isDowntrendConfirmed3,
-      isTrendReversalUp: ind.isTrendReversalUp,
-      isTrendReversalDown: ind.isTrendReversalDown,
-      isOversold: ind.isOversold,
-      isOverbought: ind.isOverbought,
-      isMACDBullish: ind.isMACDBullish,
-      isMACDBearish: ind.isMACDBearish,
-      isMACDCrossoverBullish: ind.isMACDCrossoverBullish,
-      isMACDCrossoverBearish: ind.isMACDCrossoverBearish,
-      isEMAFastSlowBullCross: ind.isEMAFastSlowBullCross,
-      isEMAFastSlowBearCross: ind.isEMAFastSlowBearCross,
-      isPriceCrossedAboveEMA50: ind.isPriceCrossedAboveEMA50,
-      isPriceCrossedBelowEMA50: ind.isPriceCrossedBelowEMA50,
-      isHighVolume: ind.isHighVolume,
-      isLowVolume: ind.isLowVolume,
-      isPriceAboveVWAP: ind.isPriceAboveVWAP,
-      isPriceBelowVWAP: ind.isPriceBelowVWAP,
-      isNearVWAP: ind.isNearVWAP,
-      isNearBBLower: ind.isNearBBLower,
-      isNearBBUpper: ind.isNearBBUpper,
-      isBelowBBLower: ind.isBelowBBLower,
-      isAboveBBUpper: ind.isAboveBBUpper,
-      isBullishCandle: ind.isBullishCandle,
-      isBearishCandle: ind.isBearishCandle,
-      isBullishEngulfing: ind.isBullishEngulfing,
-      isBearishEngulfing: ind.isBearishEngulfing,
-      isDoji: ind.isDoji,
-      isHammer: ind.isHammer,
-      isShootingStar: ind.isShootingStar,
+      // All indicators (legacy + advanced) - spread all from IndicatorEngine
+      ...ind,
       
       // Metadata
       strategyPerformances,

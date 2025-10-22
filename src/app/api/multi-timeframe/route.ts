@@ -1,5 +1,7 @@
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import CustomStrategyRepository from '@/lib/db/custom-strategy-repository';
 import StrategyRepository from '@/lib/db/strategy-repository';
+import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
@@ -19,6 +21,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Get authenticated user
+    const session = await getServerSession(authOptions);
+    const userEmail = session?.user?.email;
+    
+    if (!userEmail) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     // Use provided config or load existing strategy configuration
     let baseConfig = config;
     if (!baseConfig) {
@@ -30,6 +43,9 @@ export async function POST(request: NextRequest) {
         );
       }
     }
+    
+    // IMPORTANT: Set the userEmail for the new strategy
+    baseConfig.userEmail = userEmail;
 
     const results = [];
 
@@ -38,13 +54,14 @@ export async function POST(request: NextRequest) {
       // Create a copy of the config with the specific timeframe
       const configForTimeframe = {
         ...baseConfig,
-        timeframe
+        timeframe,
+        userEmail // Ensure userEmail is set
       };
 
       // Save the strategy with the new timeframe
-      await CustomStrategyRepository.saveCustomStrategy(configForTimeframe);
+      await CustomStrategyRepository.saveCustomStrategy(configForTimeframe, userEmail);
 
-      // Ensure it exists in the strategies table
+      // Ensure it exists in the strategies table with the correct userEmail
       await StrategyRepository.ensureStrategyExists(
         strategyName,
         'CUSTOM',
@@ -54,7 +71,8 @@ export async function POST(request: NextRequest) {
           stopLossPercent: baseConfig.stopLossPercent,
           maxPositionTime: baseConfig.maxPositionTime
         },
-        timeframe
+        timeframe,
+        userEmail // Pass userEmail to ensure proper ownership
       );
 
       results.push({
@@ -70,6 +88,19 @@ export async function POST(request: NextRequest) {
     if (strategyManager) {
       await strategyManager.addNewStrategy(baseConfig, timeframes);
       console.log(`✅ StrategyManager updated with new strategy "${strategyName}" (instant add)`);
+      
+      // IMPORTANT: Force SSE update for all active users
+      // This ensures the new strategy appears immediately in the frontend
+      const { UserSessionManager } = await import('@/lib/user-session-manager');
+      const sessionManager = UserSessionManager.getInstance();
+      const stats = sessionManager.getStats();
+      
+      if (stats.totalSessions > 0) {
+        console.log(`📡 Forcing SSE update for ${stats.totalSessions} active users to show new strategy`);
+        // The SSE managers will automatically detect the new strategy in their next sendCombinedState() call
+        // which happens every 500ms, but we can't force it directly from here
+        // The new strategy will appear in the next SSE update cycle
+      }
     }
 
     return NextResponse.json({

@@ -1,3 +1,5 @@
+import { AdvancedIndicatorValues } from '@/lib/advanced-indicators';
+
 export interface Candle {
   time: number;
   open: number;
@@ -59,7 +61,7 @@ export interface CompletedTrade {
   timeframe: string; // Timeframe on which this trade was executed (1m, 5m, 15m, 1h, 4h, 1d)
 }
 
-export interface StrategyState {
+export interface StrategyState extends AdvancedIndicatorValues {
   candles: Candle[];
   currentPrice: number;
   
@@ -75,101 +77,101 @@ export interface StrategyState {
   
   // All IndicatorEngine values (for CUSTOM strategies)
   // Moving Averages
-  ema100?: number;
-  sma7?: number;
-  sma25?: number;
-  sma50?: number;
-  sma99?: number;
-  sma200?: number;
+  ema100: number;
+  sma7: number;
+  sma25: number;
+  sma50: number;
+  sma99: number;
+  sma200: number;
   
   // Momentum Indicators
-  rsi9?: number;
-  rsi21?: number;
+  rsi9: number;
+  rsi21: number;
   
   // MACD
-  macd?: number;
-  macdSignal?: number;
-  macdHistogram?: number;
+  macd: number;
+  macdSignal: number;
+  macdHistogram: number;
   
   // Bollinger Bands
-  bbUpper?: number;
-  bbMiddle?: number;
-  bbLower?: number;
-  bbWidth?: number;
-  bbPercent?: number;
+  bbUpper: number;
+  bbMiddle: number;
+  bbLower: number;
+  bbWidth: number;
+  bbPercent: number;
   
   // Volatility
-  atr?: number;
-  atr14?: number;
-  atr21?: number;
+  atr: number;
+  atr14: number;
+  atr21: number;
   
   // Stochastic
-  stochK?: number;
-  stochD?: number;
+  stochK: number;
+  stochD: number;
   
   // Trend Strength
-  adx?: number;
+  adx: number;
   
   // Others
-  cci?: number;
-  obv?: number;
+  cci: number;
+  obv: number;
   
   // Volume Analysis
-  volumeSMA20?: number;
-  volumeRatio?: number;
+  volumeSMA20: number;
+  volumeRatio: number;
   
   // Price Position
-  priceChangePercent?: number;
-  priceChange24h?: number;
-  vwap?: number;
+  priceChangePercent: number;
+  priceChange24h: number;
+  vwap: number;
   
   // Trend Detection (Boolean)
-  isBullishTrend?: boolean;
-  isBearishTrend?: boolean;
-  isUptrend?: boolean;
-  isDowntrend?: boolean;
+  isBullishTrend: boolean;
+  isBearishTrend: boolean;
+  isUptrend: boolean;
+  isDowntrend: boolean;
   // Trend Confirmation (Boolean)
-  isUptrendConfirmed3?: boolean;
-  isDowntrendConfirmed3?: boolean;
+  isUptrendConfirmed3: boolean;
+  isDowntrendConfirmed3: boolean;
   // Trend Reversal (Boolean)
-  isTrendReversalUp?: boolean;
-  isTrendReversalDown?: boolean;
+  isTrendReversalUp: boolean;
+  isTrendReversalDown: boolean;
   
   // Momentum (Boolean)
-  isOversold?: boolean;
-  isOverbought?: boolean;
+  isOversold: boolean;
+  isOverbought: boolean;
   
   // MACD Signals (Boolean)
-  isMACDBullish?: boolean;
-  isMACDBearish?: boolean;
-  isMACDCrossoverBullish?: boolean;
-  isMACDCrossoverBearish?: boolean;
-  isEMAFastSlowBullCross?: boolean;
-  isEMAFastSlowBearCross?: boolean;
-  isPriceCrossedAboveEMA50?: boolean;
-  isPriceCrossedBelowEMA50?: boolean;
+  isMACDBullish: boolean;
+  isMACDBearish: boolean;
+  isMACDCrossoverBullish: boolean;
+  isMACDCrossoverBearish: boolean;
+  isEMAFastSlowBullCross: boolean;
+  isEMAFastSlowBearCross: boolean;
+  isPriceCrossedAboveEMA50: boolean;
+  isPriceCrossedBelowEMA50: boolean;
   
   // Volume (Boolean)
-  isHighVolume?: boolean;
-  isLowVolume?: boolean;
-  isPriceAboveVWAP?: boolean;
-  isPriceBelowVWAP?: boolean;
-  isNearVWAP?: boolean;
+  isHighVolume: boolean;
+  isLowVolume: boolean;
+  isPriceAboveVWAP: boolean;
+  isPriceBelowVWAP: boolean;
+  isNearVWAP: boolean;
   
   // Bollinger Bands Signals (Boolean)
-  isNearBBLower?: boolean;
-  isNearBBUpper?: boolean;
-  isBelowBBLower?: boolean;
-  isAboveBBUpper?: boolean;
+  isNearBBLower: boolean;
+  isNearBBUpper: boolean;
+  isBelowBBLower: boolean;
+  isAboveBBUpper: boolean;
   
   // Candle Patterns (Boolean)
-  isBullishCandle?: boolean;
-  isBearishCandle?: boolean;
-  isBullishEngulfing?: boolean;
-  isBearishEngulfing?: boolean;
-  isDoji?: boolean;
-  isHammer?: boolean;
-  isShootingStar?: boolean;
+  isBullishCandle: boolean;
+  isBearishCandle: boolean;
+  isBullishEngulfing: boolean;
+  isBearishEngulfing: boolean;
+  isDoji: boolean;
+  isHammer: boolean;
+  isShootingStar: boolean;
   
   lastSignal: TradingSignal | null;
   signals: TradingSignal[];
@@ -230,6 +232,7 @@ export interface StrategyPerformance {
   strategyName: string;
   strategyType: 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM';
   timeframe: string; // Timeframe on which this strategy is running (e.g., '1m', '5m', '15m')
+  userEmail: string; // User email for filtering strategies
   totalPnL: number;
   totalTrades: number;
   winningTrades: number;

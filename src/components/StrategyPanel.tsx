@@ -4,51 +4,51 @@ import { StrategyPerformance } from '@/types/trading';
 import { useEffect, useRef, useState } from 'react';
 import { FaBrain, FaChartLine } from 'react-icons/fa';
 import {
-    HiAdjustments,
-    HiArrowCircleDown,
-    HiArrowCircleUp,
-    HiArrowDown,
-    HiArrowUp,
-    HiBeaker,
-    HiBookOpen,
-    HiChartBar,
-    HiChartPie,
-    HiChartSquareBar,
-    HiCheckCircle,
-    HiChevronDown,
-    HiChevronLeft,
-    HiChevronRight,
-    HiClock,
-    HiCog,
-    HiCollection,
-    HiCurrencyDollar,
-    HiLightningBolt,
-    HiMinusCircle,
-    HiPlus,
-    HiRefresh,
-    HiScale,
-    HiSearch,
-    HiSortAscending,
-    HiSwitchVertical,
-    HiTrash,
-    HiTrendingDown,
-    HiTrendingUp,
-    HiViewGrid,
-    HiX,
-    HiXCircle
+  HiAdjustments,
+  HiArrowCircleDown,
+  HiArrowCircleUp,
+  HiArrowDown,
+  HiArrowUp,
+  HiBeaker,
+  HiBookOpen,
+  HiChartBar,
+  HiChartPie,
+  HiChartSquareBar,
+  HiCheckCircle,
+  HiChevronDown,
+  HiChevronLeft,
+  HiChevronRight,
+  HiClock,
+  HiCog,
+  HiCollection,
+  HiCurrencyDollar,
+  HiLightningBolt,
+  HiMinusCircle,
+  HiPlus,
+  HiRefresh,
+  HiScale,
+  HiSearch,
+  HiSortAscending,
+  HiSwitchVertical,
+  HiTrash,
+  HiTrendingDown,
+  HiTrendingUp,
+  HiViewGrid,
+  HiX,
+  HiXCircle
 } from 'react-icons/hi';
 import {
-    RiBarChartBoxLine,
-    RiCandleLine,
-    RiLineChartLine,
-    RiStockLine
+  RiBarChartBoxLine,
+  RiCandleLine,
+  RiLineChartLine,
+  RiStockLine
 } from 'react-icons/ri';
 import {
-    TbArrowsUpDown,
-    TbChartCandle,
-    TbChartDots,
-    TbTrendingDown,
-    TbTrendingUp
+  TbArrowsUpDown,
+  TbChartCandle,
+  TbChartDots,
+  TbTrendingDown,
+  TbTrendingUp
 } from 'react-icons/tb';
 
 interface IndicatorPanelData {
@@ -183,6 +183,7 @@ interface StrategyPanelProps {
   isGeneratingAI?: boolean;
   onCreateStrategy?: () => void;
   indicatorData?: IndicatorPanelData | null;
+  advancedIndicators?: any;
   onDeleteStrategy?: (strategyName: string) => void;
   onShowTimeframeComparison?: (strategyName: string) => void;
 }
@@ -204,6 +205,7 @@ export default function StrategyPanel({
   isGeneratingAI,
   onCreateStrategy,
   indicatorData,
+  advancedIndicators,
   onDeleteStrategy,
   onShowTimeframeComparison
 }: StrategyPanelProps) {
@@ -214,6 +216,8 @@ export default function StrategyPanel({
   const [flippedCards, setFlippedCards] = useState<Set<string>>(new Set()); // Cartes retournées pour afficher les détails
   const [expandedSections, setExpandedSections] = useState<Record<string, Set<string>>>({}); // Sections étendues par stratégie
   const [sortMode, setSortMode] = useState<'smart' | 'pnl' | 'winrate' | 'capital' | 'alphabetical'>('smart'); // Mode de tri
+  const [showAdvancedIndicators, setShowAdvancedIndicators] = useState(false); // Afficher tous les indicateurs avancés
+  const [activeAdvancedTab, setActiveAdvancedTab] = useState<'trend' | 'momentum' | 'volatility' | 'volume'>('trend'); // Onglet actif pour les indicateurs avancés
   const [settingsOpen, setSettingsOpen] = useState<string | null>(null); // Strategy name in settings mode
   const [showInfoOverlay, setShowInfoOverlay] = useState(false);
   const [overlayPos, setOverlayPos] = useState<{ x: number; y: number }>({ x: 80, y: 120 });
@@ -1125,22 +1129,7 @@ export default function StrategyPanel({
         return;
       }
 
-      // First reset the strategy (delete all trades and data for this timeframe)
-      const resetResponse = await fetch('/api/trading-shared', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'resetStrategy',
-          strategyName,
-          timeframe
-        })
-      });
-
-      if (!resetResponse.ok) {
-        throw new Error('Failed to reset strategy data');
-      }
-
-      // Then delete the strategy from database (only for this timeframe)
+      // Delete the strategy completely (no reset needed)
       const deleteResponse = await fetch('/api/custom-strategy', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -1148,7 +1137,7 @@ export default function StrategyPanel({
       });
 
       if (deleteResponse.ok) {
-        console.log(`🗑️ Strategy "${strategyName}" deleted successfully`);
+        console.log(`🗑️ Strategy "${strategyName}" [${timeframe}] deleted completely`);
         setDeleteConfirm(null);
         // Data will update automatically via SSE after StrategyManager reload
         console.log('📡 Data will refresh via SSE stream');
@@ -1565,6 +1554,7 @@ export default function StrategyPanel({
               <HiPlus className="w-4 h-4 text-gray-400" />
               <span className="text-xs font-medium text-gray-300">New</span>
             </button>
+            
 
             {/* Indicators Overlay Toggle */}
             <button
@@ -1749,13 +1739,13 @@ export default function StrategyPanel({
               <HiChartBar className={`transition-all ${isStatsSticky ? 'w-3 h-3' : 'w-4 h-4'}`} />
               {!overlayCollapsed && (
                 <>
-                  <span>Indicators (Live)</span>
-                  {highlightLabel && (
-                    <span className={`ml-2 px-2 py-0.5 rounded bg-blue-500/20 border border-blue-500/30 text-blue-300 whitespace-nowrap transition-all ${
-                      isStatsSticky ? 'text-[9px]' : 'text-[10px]'
-                    }`}>
-                      {highlightLabel}
-                    </span>
+              <span>Indicators (Live)</span>
+              {highlightLabel && (
+                <span className={`ml-2 px-2 py-0.5 rounded bg-blue-500/20 border border-blue-500/30 text-blue-300 whitespace-nowrap transition-all ${
+                  isStatsSticky ? 'text-[9px]' : 'text-[10px]'
+                }`}>
+                  {highlightLabel}
+                </span>
                   )}
                 </>
               )}
@@ -1774,6 +1764,22 @@ export default function StrategyPanel({
               <div className="sticky top-0 z-10 bg-gray-800/95 border-b border-gray-700 px-3 py-2">
                 <div className="text-xs text-gray-400 mb-2 font-semibold">Categories:</div>
                 <div className="flex flex-wrap gap-1.5">
+                  {/* Advanced Indicators Toggle */}
+                  <button
+                    onClick={() => setShowAdvancedIndicators(!showAdvancedIndicators)}
+                    className={`flex items-center gap-1.5 px-2 py-1 text-[10px] rounded-md border transition-all ${
+                      showAdvancedIndicators
+                        ? 'bg-purple-600/20 border-purple-500/50 text-purple-300'
+                        : 'bg-gray-700/50 border-gray-600/50 text-gray-300 hover:bg-gray-600/50'
+                    }`}
+                  >
+                    <HiChartBar className="w-3 h-3" />
+                    <span>Advanced</span>
+                    <span className="text-[9px] opacity-60">
+                      ({Object.keys(advancedIndicators || {}).length})
+                    </span>
+                  </button>
+                  
                   {INDICATOR_CATEGORIES.map((category) => {
                     const isActive = activeCategories.has(category.id);
                     // Count available indicators
@@ -1845,10 +1851,36 @@ export default function StrategyPanel({
                 </div>
               </div>
               
+              {/* Main Indicator Tabs */}
+              <div className="flex gap-1 p-2 border-b border-gray-700/50">
+                <button
+                  onClick={() => setShowAdvancedIndicators(false)}
+                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                    !showAdvancedIndicators 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Essential
+                </button>
+                <button
+                  onClick={() => setShowAdvancedIndicators(true)}
+                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                    showAdvancedIndicators 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Advanced
+                </button>
+              </div>
+              
               {/* Indicators Content - Scrollable */}
               <div className="overflow-y-auto p-3 space-y-3 text-xs text-gray-300">
             {indicatorData ? (
-                  INDICATOR_CATEGORIES.map((category) => {
+                  <>
+                    {/* Essential Indicators */}
+                    {!showAdvancedIndicators && INDICATOR_CATEGORIES.map((category) => {
                     if (!activeCategories.has(category.id)) return null;
                     
                     // Filter out undefined values and apply search filter
@@ -1956,7 +1988,212 @@ export default function StrategyPanel({
                         )}
                       </div>
                 );
-                  })
+                  })}
+                    
+                    {/* Advanced Indicators with Tabs */}
+                    {showAdvancedIndicators && advancedIndicators && (
+                      <div className="bg-gray-800/50 rounded-lg p-2 border border-gray-700/50">
+                        <div className="flex items-center gap-2 mb-2 pb-1 border-b border-gray-700/50 text-purple-400">
+                          <HiChartBar className="w-4 h-4" />
+                          <span className="font-semibold text-xs">Advanced Indicators</span>
+                          <span className="text-[10px] opacity-60">({Object.keys(advancedIndicators).length})</span>
+                        </div>
+                        
+                        {/* Advanced Indicators Tabs */}
+                        <div className="flex gap-1 mb-2">
+                          <button
+                            onClick={() => setActiveAdvancedTab('trend')}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                              activeAdvancedTab === 'trend' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                            }`}
+                          >
+                            Trend
+                          </button>
+                          <button
+                            onClick={() => setActiveAdvancedTab('momentum')}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                              activeAdvancedTab === 'momentum' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                            }`}
+                          >
+                            Momentum
+                          </button>
+                          <button
+                            onClick={() => setActiveAdvancedTab('volatility')}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                              activeAdvancedTab === 'volatility' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                            }`}
+                          >
+                            Volatility
+                          </button>
+                          <button
+                            onClick={() => setActiveAdvancedTab('volume')}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                              activeAdvancedTab === 'volume' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                            }`}
+                          >
+                            Volume
+                          </button>
+                        </div>
+                        
+                        <div className="space-y-0.5">
+                          {Object.entries(advancedIndicators).map(([key, value]) => {
+                            // Filter by category
+                            const isTrend = ['sma20', 'sma50', 'sma100', 'sma200', 'ema10', 'ema20', 'ema50', 'ema100', 'ema200', 'wma20', 'hma20', 'dema20', 'tema20', 'kama20', 'smma20', 'zlema20', 'alma20', 'vwma20', 'tenkanSen', 'kijunSen', 'senkouSpanA', 'senkouSpanB', 'chikouSpan', 'alligatorJaw', 'alligatorTeeth', 'alligatorLips', 'supertrend', 'aroonUp', 'aroonDown', 'aroonOscillator'].includes(key);
+                            const isMomentum = ['rsi', 'rsi9', 'rsi21', 'stochK', 'stochD', 'williamsR', 'cci', 'roc', 'momentum', 'ultimateOscillator', 'awesomeOscillator', 'chandeMomentumOscillator', 'fisherTransform', 'coppockCurve', 'detrendedPriceOscillator', 'macd', 'macdSignal', 'macdHistogram', 'ppo', 'trix', 'vortexIndicator', 'adx', 'parabolicSAR', 'isRSICrossedAbove30', 'isRSICrossedBelow70'].includes(key);
+                            const isVolatility = ['bbUpper', 'bbMiddle', 'bbLower', 'bbWidth', 'bbPercent', 'atr', 'atr14', 'atr21', 'natr', 'keltnerUpper', 'keltnerMiddle', 'keltnerLower', 'donchianUpper', 'donchianMiddle', 'donchianLower', 'chaikinVolatility', 'massIndex', 'gatorOscillator'].includes(key);
+                            const isVolume = ['obv', 'vwap', 'ad', 'chaikinMoneyFlow', 'chaikinOscillator', 'mfi', 'easeOfMovement', 'forceIndex', 'negativeVolumeIndex', 'positiveVolumeIndex', 'volumeProfile', 'volumeSMA20', 'volumeRatio'].includes(key);
+                            
+                            let shouldShow = false;
+                            if (activeAdvancedTab === 'trend' && isTrend) shouldShow = true;
+                            if (activeAdvancedTab === 'momentum' && isMomentum) shouldShow = true;
+                            if (activeAdvancedTab === 'volatility' && isVolatility) shouldShow = true;
+                            if (activeAdvancedTab === 'volume' && isVolume) shouldShow = true;
+                            
+                            if (!shouldShow) return null;
+                            
+                            // Get description for advanced indicators
+                            const getAdvancedDescription = (indicatorKey: string) => {
+                              const descriptions: Record<string, string> = {
+                                // Trend indicators
+                                'sma20': 'Simple Moving Average (20 periods) - Smooths price data to identify trend direction',
+                                'sma50': 'Simple Moving Average (50 periods) - Medium-term trend indicator',
+                                'sma100': 'Simple Moving Average (100 periods) - Long-term trend indicator',
+                                'sma200': 'Simple Moving Average (200 periods) - Major trend indicator',
+                                'ema10': 'Exponential Moving Average (10 periods) - Fast trend following',
+                                'ema20': 'Exponential Moving Average (20 periods) - Short-term trend',
+                                'ema50': 'Exponential Moving Average (50 periods) - Medium-term trend',
+                                'ema100': 'Exponential Moving Average (100 periods) - Long-term trend',
+                                'ema200': 'Exponential Moving Average (200 periods) - Major trend',
+                                'tenkanSen': 'Ichimoku Tenkan-sen - Conversion line for trend direction',
+                                'kijunSen': 'Ichimoku Kijun-sen - Base line for trend strength',
+                                'senkouSpanA': 'Ichimoku Senkou Span A - Leading span A for future support/resistance',
+                                'senkouSpanB': 'Ichimoku Senkou Span B - Leading span B for future support/resistance',
+                                'chikouSpan': 'Ichimoku Chikou Span - Lagging span for trend confirmation',
+                                'alligatorJaw': 'Alligator Jaw (SMMA 13) - Long-term trend filter',
+                                'alligatorTeeth': 'Alligator Teeth (SMMA 8) - Medium-term trend filter',
+                                'alligatorLips': 'Alligator Lips (SMMA 5) - Short-term trend filter',
+                                'supertrend': 'SuperTrend - Trend following indicator with stop-loss',
+                                'aroonUp': 'Aroon Up - Measures time since highest high',
+                                'aroonDown': 'Aroon Down - Measures time since lowest low',
+                                'aroonOscillator': 'Aroon Oscillator - Difference between Aroon Up and Down',
+                                
+                                // Momentum indicators
+                                'rsi': 'Relative Strength Index - Momentum oscillator (0-100)',
+                                'rsi9': 'RSI (9 periods) - Fast momentum indicator',
+                                'rsi21': 'RSI (21 periods) - Slower momentum indicator',
+                                'stochK': 'Stochastic %K - Momentum oscillator comparing closing price to price range',
+                                'stochD': 'Stochastic %D - Smoothed version of %K',
+                                'williamsR': 'Williams %R - Momentum oscillator measuring overbought/oversold',
+                                'cci': 'Commodity Channel Index - Momentum oscillator for cyclical trends',
+                                'roc': 'Rate of Change - Momentum indicator measuring price change rate',
+                                'momentum': 'Momentum - Simple momentum indicator',
+                                'ultimateOscillator': 'Ultimate Oscillator - Multi-timeframe momentum indicator',
+                                'awesomeOscillator': 'Awesome Oscillator - Momentum indicator using SMA difference',
+                                'chandeMomentumOscillator': 'Chande Momentum Oscillator - Momentum indicator',
+                                'fisherTransform': 'Fisher Transform - Price transformation for better signals',
+                                'coppockCurve': 'Coppock Curve - Long-term momentum indicator',
+                                'detrendedPriceOscillator': 'Detrended Price Oscillator - Removes trend to show cycles',
+                                'macd': 'MACD Line - Difference between EMA 12 and 26',
+                                'macdSignal': 'MACD Signal Line - EMA of MACD line',
+                                'macdHistogram': 'MACD Histogram - Difference between MACD and Signal',
+                                'ppo': 'Percentage Price Oscillator - MACD as percentage',
+                                'trix': 'TRIX - Rate of change of triple smoothed EMA',
+                                'vortexIndicator': 'Vortex Indicator - Trend reversal indicator',
+                                'adx': 'Average Directional Index - Trend strength indicator',
+                                'parabolicSAR': 'Parabolic SAR - Trend following stop and reverse',
+                                'isRSICrossedAbove30': 'RSI Crossed Above 30 - Bullish momentum signal',
+                                'isRSICrossedBelow70': 'RSI Crossed Below 70 - Bearish momentum signal',
+                                
+                                // Volatility indicators
+                                'bbUpper': 'Bollinger Bands Upper - Upper volatility band',
+                                'bbMiddle': 'Bollinger Bands Middle - SMA center line',
+                                'bbLower': 'Bollinger Bands Lower - Lower volatility band',
+                                'bbWidth': 'Bollinger Bands Width - Volatility measurement',
+                                'bbPercent': 'Bollinger Bands %B - Position within bands',
+                                'atr': 'Average True Range - Volatility measurement',
+                                'atr14': 'ATR (14 periods) - Standard volatility indicator',
+                                'atr21': 'ATR (21 periods) - Longer-term volatility',
+                                'natr': 'Normalized ATR - ATR as percentage of price',
+                                'keltnerUpper': 'Keltner Channel Upper - Volatility-based upper band',
+                                'keltnerMiddle': 'Keltner Channel Middle - EMA center line',
+                                'keltnerLower': 'Keltner Channel Lower - Volatility-based lower band',
+                                'donchianUpper': 'Donchian Channel Upper - Highest high over period',
+                                'donchianMiddle': 'Donchian Channel Middle - Midpoint of channel',
+                                'donchianLower': 'Donchian Channel Lower - Lowest low over period',
+                                'chaikinVolatility': 'Chaikin Volatility - Rate of change of EMA',
+                                'massIndex': 'Mass Index - Volatility indicator for trend changes',
+                                'gatorOscillator': 'Gator Oscillator - Alligator indicator oscillator',
+                                
+                                // Volume indicators
+                                'obv': 'On-Balance Volume - Cumulative volume indicator',
+                                'vwap': 'Volume Weighted Average Price - Volume-weighted price',
+                                'ad': 'Accumulation/Distribution - Volume-price relationship',
+                                'chaikinMoneyFlow': 'Chaikin Money Flow - Volume-weighted accumulation/distribution',
+                                'chaikinOscillator': 'Chaikin Oscillator - Difference of AD line EMAs',
+                                'mfi': 'Money Flow Index - Volume-weighted RSI',
+                                'easeOfMovement': 'Ease of Movement - Volume-price relationship',
+                                'forceIndex': 'Force Index - Volume-price momentum',
+                                'negativeVolumeIndex': 'Negative Volume Index - Performance on down volume',
+                                'positiveVolumeIndex': 'Positive Volume Index - Performance on up volume',
+                                'volumeProfile': 'Volume Profile - Volume distribution by price',
+                                'volumeSMA20': 'Volume SMA (20) - Smoothed volume indicator',
+                                'volumeRatio': 'Volume Ratio - Current vs average volume'
+                              };
+                              return descriptions[indicatorKey] || 'Advanced technical indicator';
+                            };
+                            
+                            if (typeof value === 'number' && !isNaN(value)) {
+                              const formattedValue = value.toFixed(2);
+                              const color = value > 0 ? 'text-green-400' : value < 0 ? 'text-red-400' : 'text-gray-400';
+                              
+                              return (
+                                <div key={key} className="flex items-center justify-between gap-3 py-0.5 cursor-pointer hover:bg-gray-700/30 px-1 rounded transition-colors group">
+                                  <div className="flex items-center gap-2 flex-1 text-gray-400">
+                                    <span className="text-xs">{key}</span>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <div className="absolute z-10 bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-gray-300 max-w-xs shadow-lg">
+                                        {getAdvancedDescription(key)}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="font-mono text-white">{formattedValue}</div>
+                                </div>
+                              );
+                            } else if (typeof value === 'boolean') {
+                              const color = value ? 'text-green-400' : 'text-red-400';
+                              const dot = value ? 'bg-green-500' : 'bg-red-500';
+                              
+                              return (
+                                <div key={key} className="flex items-center justify-between gap-3 py-0.5 cursor-pointer hover:bg-gray-700/30 px-1 rounded transition-colors group">
+                                  <div className="flex items-center gap-2 flex-1">
+                                    <span className={`w-1.5 h-1.5 rounded-full ${dot} flex-shrink-0`}></span>
+                                    <span className={`${color} text-xs`}>{key}</span>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <div className="absolute z-10 bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-gray-300 max-w-xs shadow-lg">
+                                        {getAdvancedDescription(key)}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className={`font-mono text-[10px] ${color}`}>
+                                    {value ? 'true' : 'false'}
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return null;
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
             ) : (
                   <div className="text-gray-500 text-center py-4">No data available</div>
             )}
