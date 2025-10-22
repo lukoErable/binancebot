@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server';
 export async function GET() {
   try {
     // Daemon stats
-    const stats = tradingDaemon.getStats();
+    const stats = await tradingDaemon.getStats();
     const isActive = tradingDaemon.isActive();
     
     // StrategyManager stats
@@ -72,7 +72,13 @@ export async function GET() {
         uptime: uptimeStr,
         uptimeMs,
         totalAnalyses: stats.totalAnalyses,
-        tradesExecuted: stats.tradesExecuted
+        tradesExecuted: stats.tradesExecuted,
+        memoryUsageMB: stats.memoryUsageMB,
+        dbPool: {
+          total: stats.dbPoolTotal,
+          active: stats.dbPoolActive,
+          idle: stats.dbPoolIdle
+        }
       },
       strategies: {
         total: allPerformances.length,

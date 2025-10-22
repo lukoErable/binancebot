@@ -5,7 +5,7 @@ export class StrategyRepository {
   // Cache to avoid reloading strategies on every call
   private static cache: Record<string, unknown>[] | null = null;
   private static cacheTimestamp: number = 0;
-  private static CACHE_TTL = 30000; // 30 seconds cache
+  private static CACHE_TTL = 5000; // 5 seconds cache (optimized for real-time updates)
   /**
    * Ensure a strategy row exists in DB; if missing, create it
    */
@@ -15,23 +15,23 @@ export class StrategyRepository {
     isActive: boolean = false,
     config?: { profitTargetPercent?: number; stopLossPercent?: number; maxPositionTime?: number },
     timeframe: string = '1m',
-    userId: number = 1
+    userEmail: string = 'system@trading.bot'
   ): Promise<void> {
     try {
-      const checkQuery = `SELECT 1 FROM strategies WHERE name = $1 AND timeframe = $2 AND user_id = $3 LIMIT 1`;
-      const exists = await pool.query(checkQuery, [name, timeframe, userId]);
+      const checkQuery = `SELECT 1 FROM strategies WHERE name = $1 AND timeframe = $2 AND user_email = $3 LIMIT 1`;
+      const exists = await pool.query(checkQuery, [name, timeframe, userEmail]);
       if (exists.rowCount && exists.rowCount > 0) return;
 
       const insertQuery = `
-        INSERT INTO strategies (user_id, name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
+        INSERT INTO strategies (user_email, name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `;
       // Initialize activated_at to NULL and total_active_time to 0
       const activatedAt = null;
       const totalActiveTime = 0;
       
-      await pool.query(insertQuery, [userId, name, type, isActive, JSON.stringify(config || {}), timeframe, activatedAt, totalActiveTime]);
-      console.log(`✅ Strategy created in DB: ${name} [${timeframe}] (${type}) - initialized with activated_at=NULL, total_active_time=0`);
+      await pool.query(insertQuery, [userEmail, name, type, isActive, JSON.stringify(config || {}), timeframe, activatedAt, totalActiveTime]);
+      console.log(`✅ Strategy created in DB: ${name} [${timeframe}] (${type}) for ${userEmail} - initialized with activated_at=NULL, total_active_time=0`);
     } catch (error) {
       console.error('❌ Error ensuring strategy exists:', error);
     }
@@ -160,8 +160,10 @@ export class StrategyRepository {
 
   /**
    * Get all strategies from database (with caching)
+   * @param useCache - Whether to use cached results
+   * @param userEmail - User email to filter by, or null to get ALL users' strategies (for daemon)
    */
-  static async getAllStrategies(useCache: boolean = true, userId: number = 1): Promise<Record<string, unknown>[]> {
+  static async getAllStrategies(useCache: boolean = true, userEmail: string | null = null): Promise<Record<string, unknown>[]> {
     try {
       // Check cache first (cache is per-user in production, global for now)
       const now = Date.now();
@@ -170,8 +172,14 @@ export class StrategyRepository {
         return this.cache;
       }
       
-      const query = `SELECT * FROM strategies WHERE user_id = $1 ORDER BY name`;
-      const result = await pool.query(query, [userId]);
+      // If userEmail is null, get ALL strategies (for daemon)
+      const query = userEmail === null 
+        ? `SELECT * FROM strategies ORDER BY user_email, name`
+        : `SELECT * FROM strategies WHERE user_email = $1 ORDER BY name`;
+      
+      const result = userEmail === null
+        ? await pool.query(query)
+        : await pool.query(query, [userEmail]);
       
       // Update cache
       this.cache = result.rows;

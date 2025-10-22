@@ -17,6 +17,7 @@ export class StrategyManager {
     type: 'CUSTOM';
     isActive: boolean;
     timeframe: string; // '1m', '5m', '15m', '1h', '4h', '1d'
+    userEmail: string; // User email
     activatedAt?: number | null;
     totalActiveTime?: number;
   }>;
@@ -56,6 +57,39 @@ export class StrategyManager {
   }
 
   /**
+   * Add a new strategy without reloading everything (OPTIMIZED)
+   */
+  async addNewStrategy(config: CustomStrategyConfig, timeframes: string[] = ['1m']): Promise<void> {
+    console.log(`➕ Adding new strategy: ${config.name} on ${timeframes.join(', ')}`);
+    
+    // Create strategy instance
+    const strategy = new CustomStrategy(config);
+    
+    // Add to each timeframe
+    for (const timeframe of timeframes) {
+      const key = this.getStrategyKey(config.name, timeframe);
+      
+      this.strategies.set(key, {
+        strategy,
+        type: 'CUSTOM',
+        isActive: false, // Start inactive
+        timeframe,
+        userEmail: (config as any).userEmail || 'system@trading.bot',
+        activatedAt: null,
+        totalActiveTime: 0
+      });
+      
+      console.log(`✅ Added ${config.name} [${timeframe}] (no full reload needed)`);
+    }
+    
+    // Clear cache to force refresh on next getAllStrategies()
+    StrategyRepository.clearCache();
+    CustomStrategyRepository.clearCache();
+    
+    console.log(`✅ Strategy "${config.name}" added to ${timeframes.length} timeframe(s) instantly`);
+  }
+
+  /**
    * Helper: Generate strategy key for Map storage
    */
   private getStrategyKey(name: string, timeframe: string): string {
@@ -77,17 +111,20 @@ export class StrategyManager {
   private async loadFromDatabase(): Promise<void> {
     try {
       // Load strategy activation states and configs (per timeframe, independent)
-      const strategies = await StrategyRepository.getAllStrategies();
+      // Pass null to get ALL users' strategies (for daemon)
+      const strategies = await StrategyRepository.getAllStrategies(true, null);
       strategies.forEach((dbStrategy: any) => {
         const strategyName = dbStrategy.name;
         const timeframe = dbStrategy.timeframe || '1m';
         const key = this.getStrategyKey(strategyName, timeframe);
         const isActive = dbStrategy.is_active;
         const config = dbStrategy.config || {};
+        const userEmail = dbStrategy.user_email || 'system@trading.bot';
         
         if (this.strategies.has(key)) {
           const strategyData = this.strategies.get(key)!;
           strategyData.isActive = isActive;
+          strategyData.userEmail = userEmail;
           
           // Use LOCAL state for timer (independent per timeframe)
           strategyData.totalActiveTime = dbStrategy.total_active_time || 0;
@@ -183,12 +220,15 @@ export class StrategyManager {
    */
   private async loadCustomStrategies(): Promise<void> {
     try {
-      const customConfigs = await CustomStrategyRepository.getAllCustomStrategies();
+      // Pass null to get ALL users' custom strategies (for daemon)
+      const customConfigs = await CustomStrategyRepository.getAllCustomStrategies(true, null);
       
       // Get activated_at and total_active_time from strategies table (per timeframe)
-      const strategiesData = await StrategyRepository.getAllStrategies();
+      const strategiesData = await StrategyRepository.getAllStrategies(true, null);
       const activatedAtMap = new Map<string, number | null>();
       const totalActiveTimeMap = new Map<string, number>();
+      const userEmailMap = new Map<string, string>();
+      
       strategiesData.forEach((dbStrategy: any) => {
         const key = this.getStrategyKey(dbStrategy.name, dbStrategy.timeframe || '1m');
         if (dbStrategy.activated_at) {
@@ -197,6 +237,7 @@ export class StrategyManager {
           activatedAtMap.set(key, null);
         }
         totalActiveTimeMap.set(key, dbStrategy.total_active_time || 0);
+        userEmailMap.set(key, dbStrategy.user_email || 'system@trading.bot');
       });
       
       for (const config of customConfigs) {
@@ -209,12 +250,14 @@ export class StrategyManager {
         // Use LOCAL state for timer (independent per timeframe)
         const totalActiveTime = totalActiveTimeMap.get(key) || 0;
         const activatedAt = isActive ? Date.now() : null;
+        const userEmail = userEmailMap.get(key) || 'system@trading.bot';
         
         this.strategies.set(key, {
           strategy,
           type: 'CUSTOM',
           isActive,
           timeframe,
+          userEmail,
           activatedAt,
           totalActiveTime
         });
@@ -474,6 +517,7 @@ export class StrategyManager {
         strategyName: name,
         strategyType: 'CUSTOM',
         timeframe: strategyData.timeframe, // Add timeframe to performance
+        userEmail: strategyData.userEmail, // Add userEmail to performance
         totalPnL: positionInfo.totalPnL,
         totalTrades: positionInfo.totalTrades,
         winningTrades: positionInfo.winningTrades,

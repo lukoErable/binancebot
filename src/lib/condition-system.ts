@@ -450,22 +450,6 @@ export const PresetConditions = {
     )
 };
 
-// === CONDITION SERIALIZATION ===
-
-/**
- * Serialize a condition or condition group to JSON
- */
-export function serializeCondition(condition: Condition | ConditionGroup): string {
-  return JSON.stringify(condition, null, 2);
-}
-
-/**
- * Deserialize a condition or condition group from JSON
- */
-export function deserializeCondition(json: string): Condition | ConditionGroup {
-  return JSON.parse(json);
-}
-
 /**
  * Get a human-readable description of a condition
  */

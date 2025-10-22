@@ -2,6 +2,7 @@
 
 import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { StrategyPerformance, StrategyState } from '@/types/trading';
+import { signIn, useSession } from 'next-auth/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { HiChevronDown, HiClock } from 'react-icons/hi';
 import BinanceChart from './BinanceChart';
@@ -28,12 +29,17 @@ declare global {
 }
 
 export default function Dashboard() {
+  // Auth session
+  const { data: session, status } = useSession();
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  
   // Cache states for each timeframe
   const [timeframeStates, setTimeframeStates] = useState<Record<string, StrategyState>>({});
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [selectedTimeframe, setSelectedTimeframe] = useState('1m');
+  const [selectedTimeframe, setSelectedTimeframe] = useState('1m'); // Always start with 1m for SSR
   const [isChangingTimeframe, setIsChangingTimeframe] = useState(false);
+  const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [strategyPerformances, setStrategyPerformances] = useState<StrategyPerformance[]>([]);
   const [localConfigCache, setLocalConfigCache] = useState<Record<string, { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }>>({});
   const [selectedStrategy, setSelectedStrategy] = useState<string>('GLOBAL'); // 'GLOBAL' or strategy name
@@ -48,6 +54,60 @@ export default function Dashboard() {
   
   // Get current state from cache
   const state = timeframeStates[selectedTimeframe] || null;
+
+  // Load saved timeframe from localStorage on first mount (client-side only, after hydration)
+  useEffect(() => {
+    if (isFirstLoad && typeof window !== 'undefined') {
+      const saved = localStorage.getItem('selectedTimeframe');
+      if (saved && saved !== selectedTimeframe) {
+        console.log(`📂 Loading saved timeframe from localStorage: ${saved}`);
+        setSelectedTimeframe(saved);
+      }
+      setIsFirstLoad(false);
+    }
+  }, [isFirstLoad, selectedTimeframe]);
+
+  // Save selected timeframe to localStorage whenever it changes
+  useEffect(() => {
+    if (!isFirstLoad && typeof window !== 'undefined') {
+      localStorage.setItem('selectedTimeframe', selectedTimeframe);
+      console.log(`💾 Saved timeframe to localStorage: ${selectedTimeframe}`);
+    }
+  }, [selectedTimeframe, isFirstLoad]);
+
+  // Auto-start SSE when auth status is ready (includes reconnection on login/logout)
+  useEffect(() => {
+    console.log(`🔍 [SSE Effect] status=${status}, isFirstLoad=${isFirstLoad}, session=${session ? 'exists' : 'null'}`);
+    
+    // Skip while NextAuth is loading OR during first load (wait for localStorage to load)
+    if (status === 'loading' || isFirstLoad) {
+      if (status === 'loading') console.log('⏳ Waiting for auth to load...');
+      if (isFirstLoad) console.log('⏳ Waiting for localStorage to load...');
+      return;
+    }
+    
+    console.log(`🔄 Auth status: ${status}, starting SSE with timeframe: ${selectedTimeframe}...`);
+    
+    // Close existing connection if any
+    if (window.tradingEventSource) {
+      console.log('🔌 Closing existing SSE connection...');
+      window.tradingEventSource.close();
+      window.tradingEventSource = undefined;
+    }
+    
+    // Start SSE with a small delay to ensure clean reconnection
+    const startTimer = setTimeout(() => {
+      console.log(`🚀 Starting SSE stream on ${selectedTimeframe}...`);
+      startDataStream(selectedTimeframe, false);
+    }, 300);
+    
+    return () => {
+      clearTimeout(startTimer);
+      if (window.tradingEventSource) {
+        window.tradingEventSource.close();
+      }
+    };
+  }, [status, isFirstLoad]); // Restart SSE when auth status changes OR after first load completes
 
   // Detect when stats bar becomes sticky using IntersectionObserver
   useEffect(() => {
@@ -87,6 +147,15 @@ export default function Dashboard() {
       eventSource.onmessage = (event) => {
         try {
           const data: StrategyState = JSON.parse(event.data);
+          
+          // Debug log for anonymous users
+          if (!session || status !== 'authenticated') {
+            console.log(`📦 [ANONYMOUS] Received data from SSE:`, {
+              hasStrategyPerformances: !!data.strategyPerformances,
+              count: data.strategyPerformances?.length || 0,
+              strategies: data.strategyPerformances?.map(p => p.strategyName) || []
+            });
+          }
           
           // Clear timeout on first message
           clearTimeout(connectionTimeout);
@@ -170,8 +239,28 @@ export default function Dashboard() {
 
 
   const handleToggleStrategy = async (strategyName: string) => {
+    // Check if user is authenticated
+    if (!session || status !== 'authenticated') {
+      console.log('⚠️  User not authenticated, showing login modal');
+      setShowLoginModal(true);
+      return;
+    }
+    
     try {
-      await fetch(`/api/trading-shared?action=toggleStrategy&strategyName=${encodeURIComponent(strategyName)}&timeframe=${selectedTimeframe}`);
+      const response = await fetch('/api/trading-shared', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'toggleStrategy',
+          strategyName,
+          timeframe: selectedTimeframe
+        })
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        console.error('Toggle failed:', error);
+      }
       // No need to refresh - data comes via SSE
     } catch (error) {
       console.error('Error toggling strategy:', error);
@@ -328,7 +417,14 @@ export default function Dashboard() {
     
     // Informer le backend en arrière-plan (ne pas attendre)
     if (isConnected) {
-      fetch(`/api/trading-shared?action=changeTimeframe&timeframe=${timeframe}`)
+      fetch('/api/trading-shared', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'changeTimeframe',
+          timeframe
+        })
+      })
         .then(() => {
           // Les nouvelles données arriveront via SSE et mettront à jour le cache
           setIsChangingTimeframe(false);
@@ -1359,7 +1455,7 @@ export default function Dashboard() {
               '⚪';
             
             const tooltipText = data.formula 
-              ? `${statusEmoji} ${name}\n${data.formula}\n${data.value ? '✓ CONDITION MET' : '✗ CONDITION NOT MET'}`
+              ? `${statusEmoji} ${name}\n${data.formula}`
               : `${name}: ${data.value ? '✓ Met' : '✗ Not met'}`;
             
             return (
@@ -1848,22 +1944,6 @@ export default function Dashboard() {
   };
 
   // Show full page skeleton on initial load
-  if (!state && isConnecting) {
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-green-500 mb-6"></div>
-          <h2 className="text-2xl font-bold text-white mb-2">Loading Trading Dashboard...</h2>
-          <p className="text-gray-400">Initializing strategies and connecting to Binance</p>
-          <div className="mt-4 text-sm text-gray-500">
-            <p>📊 Loading all timeframes (1m, 5m, 15m, 1h, 4h, 1d)</p>
-            <p className="mt-1">⏳ This may take up to 15 seconds...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Get background style based on selected strategy
   const getBackgroundStyle = () => {
     if (selectedStrategy === 'GLOBAL') return {};
@@ -2036,17 +2116,23 @@ export default function Dashboard() {
             {/* User Authentication */}
             <UserAuth />
             
-            {isConnecting && (
+            {/* Monitoring Status */}
+            {isConnecting ? (
               <div className="bg-gradient-to-r from-sky-500 to-cyan-500 text-white px-4 py-2 rounded text-sm font-medium shadow-lg shadow-sky-500/30">
                 ⏳ Connecting...
               </div>
-            )}
-            
-            {isConnected && (
+            ) : isConnected ? (
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
                 <span className="text-sm font-medium text-green-400">
                   MONITORING
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                <span className="text-sm font-medium text-red-400">
+                  DISCONNECTED
                 </span>
               </div>
             )}
@@ -2534,18 +2620,42 @@ export default function Dashboard() {
               selectedStrategy={selectedStrategy}
               onSelectStrategy={setSelectedStrategy}
               onRefresh={onRefresh}
-              onConfigChange={(strategyName, config) => {
+              onConfigChange={(!session || status !== 'authenticated') ? undefined : async (strategyName, config) => {
+                // Update local cache immediately for instant UI feedback
                 setLocalConfigCache(prev => ({
                   ...prev,
                   [strategyName]: config
                 }));
+                
+                // Save to backend
+                try {
+                  const response = await fetch('/api/trading-shared', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'updateConfig',
+                      strategyName,
+                      timeframe: selectedTimeframe,
+                      config
+                    })
+                  });
+                  
+                  const result = await response.json();
+                  if (result.success) {
+                    console.log(`✅ Config saved for ${strategyName} [${selectedTimeframe}]`);
+                  } else {
+                    console.error(`❌ Failed to save config:`, result.error);
+                  }
+                } catch (error) {
+                  console.error('Error saving config:', error);
+                }
               }}
               getCriteriaForStrategy={getCriteriaForStrategy}
               getStatusesArray={getStatusesArray}
               renderCriteriaLabels={renderCriteriaLabels}
-              onGenerateAIStrategy={handleGenerateAIStrategy}
+              onGenerateAIStrategy={(!session || status !== 'authenticated') ? undefined : handleGenerateAIStrategy}
               isGeneratingAI={isGeneratingAI}
-              onCreateStrategy={() => setShowStrategyBuilder(true)}
+              onCreateStrategy={(!session || status !== 'authenticated') ? undefined : () => setShowStrategyBuilder(true)}
               indicatorData={state ? {
                 // Price-based
                 price: state.currentPrice,
@@ -2661,8 +2771,30 @@ export default function Dashboard() {
                 isShootingStar: (state as any).isShootingStar
               } as any : null}
               onDeleteStrategy={async (strategyName) => {
-                // Cette fonction sera appelée depuis StrategyPanel après confirmation
-                console.log(`Deleting strategy: ${strategyName}`);
+                if (!session || status !== 'authenticated') {
+                  setShowLoginModal(true);
+                  return;
+                }
+                
+                try {
+                  // Delete from all timeframes
+                  const allTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+                  console.log(`🗑️ Deleting strategy: ${strategyName} from all timeframes...`);
+                  
+                  for (const tf of allTimeframes) {
+                    const response = await fetch(`/api/delete-strategy?strategyName=${encodeURIComponent(strategyName)}&timeframe=${tf}`, {
+                      method: 'DELETE'
+                    });
+                    if (response.ok) {
+                      console.log(`✅ Deleted ${strategyName} [${tf}]`);
+                    }
+                  }
+                  
+                  // Reload strategies via SSE (will update automatically)
+                  console.log('✅ Strategy deleted, data will update via SSE');
+                } catch (error) {
+                  console.error('Error deleting strategy:', error);
+                }
               }}
               onShowTimeframeComparison={async (strategyName) => {
                 setComparisonStrategyName(strategyName);
@@ -2746,6 +2878,64 @@ export default function Dashboard() {
             setAllTimeframePerformances([]);
           }}
         />
+      )}
+
+      {/* Login Required Modal */}
+      {showLoginModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm">
+          <div className="bg-gray-800 border border-gray-700 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
+            <div className="text-center">
+              {/* Icon */}
+              <div className="mb-6 flex justify-center">
+                <div className="bg-gradient-to-br from-blue-500 to-purple-600 p-4 rounded-full">
+                  <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                </div>
+              </div>
+              
+              {/* Title */}
+              <h2 className="text-2xl font-bold text-white mb-3">
+                Connexion Requise
+              </h2>
+              
+              {/* Description */}
+              <p className="text-gray-400 mb-6">
+                Pour activer et utiliser vos propres stratégies de trading, connectez-vous avec votre compte Google.
+              </p>
+              
+              {/* Sign In Button */}
+              <button
+                onClick={() => {
+                  setShowLoginModal(false);
+                  signIn('google', { callbackUrl: window.location.href });
+                }}
+                className="w-full bg-white hover:bg-gray-100 text-gray-900 font-semibold py-3 px-6 rounded-lg transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-3 mb-3"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Se connecter avec Google
+              </button>
+              
+              {/* Cancel Button */}
+              <button
+                onClick={() => setShowLoginModal(false)}
+                className="w-full bg-gray-700 hover:bg-gray-600 text-white font-medium py-3 px-6 rounded-lg transition-all"
+              >
+                Annuler
+              </button>
+              
+              {/* Info Text */}
+              <p className="text-xs text-gray-500 mt-4">
+                Les stratégies affichées sont des exemples. Une fois connecté, vous pourrez créer et activer vos propres stratégies.
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1106,8 +1106,8 @@ export default function StrategyPanel({
       if (response.ok) {
         console.log(`✅ Strategy "${strategyName}" [${timeframe}] reset successfully`);
         setResetConfirm(null);
-        // Reload page to refresh data
-        window.location.reload();
+        // Data will update automatically via SSE
+        console.log('📡 Data will refresh via SSE stream');
       } else {
         console.error('Failed to reset strategy');
       }
@@ -1150,8 +1150,8 @@ export default function StrategyPanel({
       if (deleteResponse.ok) {
         console.log(`🗑️ Strategy "${strategyName}" deleted successfully`);
         setDeleteConfirm(null);
-        // Reload page to refresh data
-        window.location.reload();
+        // Data will update automatically via SSE after StrategyManager reload
+        console.log('📡 Data will refresh via SSE stream');
       } else {
         const data = await deleteResponse.json();
         throw new Error(data.error || 'Failed to delete strategy');
@@ -1209,8 +1209,8 @@ export default function StrategyPanel({
         setShowMultiTimeframeModal(false);
         setSelectedStrategyForMultiTF(null);
         setSelectedTimeframes(new Set(['1m']));
-        // Reload to show new strategies
-        window.location.reload();
+        // New strategies will appear automatically via SSE
+        console.log('📡 New strategies will appear via SSE stream');
       } else {
         const error = await response.json();
         console.error('Failed to activate multi-timeframe:', error);
@@ -1704,7 +1704,7 @@ export default function StrategyPanel({
                   body: JSON.stringify({ timeframe: currentTimeframe || '1m' })
                 });
                 onRefresh?.();
-                window.location.reload();
+                console.log('📡 Trades reset, data will refresh via SSE stream');
               } catch (e) {
                 console.error('❌ Reset all failed', e);
               }

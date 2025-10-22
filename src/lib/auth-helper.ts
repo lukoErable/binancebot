@@ -24,16 +24,6 @@ export async function getCurrentUserId(): Promise<number> {
 }
 
 /**
- * Get user ID synchronously (for contexts where async is not possible)
- * Always returns 1 (lucasfabregoule@gmail.com) for now
- */
-export function getCurrentUserIdSync(): number {
-  // TODO: Implement proper session management
-  // For now, return default user
-  return 1;
-}
-
-/**
  * Check if user is authenticated
  */
 export async function isAuthenticated(): Promise<boolean> {

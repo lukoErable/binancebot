@@ -75,9 +75,10 @@ export class UserSessionManager {
       return;
     }
     
-    // Check if already subscribed
+    // Check if already subscribed (silent - normal in dev during hot reload)
     if (session.activeTimeframes.has(timeframe)) {
-      console.log(`⚠️  User ${userId} already subscribed to ${timeframe}`);
+      // Update last activity and return without logging (reconnections are normal)
+      session.lastActivity = Date.now();
       return;
     }
     

@@ -32,8 +32,9 @@ export const authOptions: NextAuthOptions = {
           const userId = result.rows[0].id;
           console.log(`✅ New user created: ${user.email} (ID: ${userId})`);
           
-          // Create default strategies for new user
-          await createDefaultStrategies(userId, user.email);
+          // Default strategies are now created via /api/trading-shared when user connects
+          // (see hasStrategies() check in trading-shared/route.ts)
+          console.log(`  → Default strategies will be created on first SSE connection`);
         } else {
           console.log(`✅ User logged in: ${user.email}`);
         }
@@ -64,75 +65,6 @@ export const authOptions: NextAuthOptions = {
   },
   secret: process.env.NEXTAUTH_SECRET,
 };
-
-/**
- * Create default strategies for a new user
- */
-async function createDefaultStrategies(userId: number, userEmail: string): Promise<void> {
-  console.log(`🎯 Creating default strategies for ${userEmail}...`);
-  
-  const defaultStrategies = [
-    {
-      name: 'QuickStrike Scalp',
-      type: 'CUSTOM',
-      config: {
-        description: 'Strategy de scalping rapide avec indicateurs multiples',
-        profitTargetPercent: 3,
-        stopLossPercent: 1.5,
-        maxPositionTime: 15,
-        positionSize: 0.05,
-        cooldownPeriod: 1,
-        color: 'sky'
-      }
-    },
-    {
-      name: 'Trend Follower AI',
-      type: 'CUSTOM',
-      config: {
-        description: 'Suiveur de tendance confirmée',
-        profitTargetPercent: 2,
-        stopLossPercent: 2,
-        maxPositionTime: 60,
-        positionSize: 0.05,
-        cooldownPeriod: 5,
-        color: 'green'
-      }
-    },
-    {
-      name: 'ConservativeTrendTrader',
-      type: 'CUSTOM',
-      config: {
-        description: 'Trading conservateur sur tendances fortes',
-        profitTargetPercent: 2,
-        stopLossPercent: 2.5,
-        maxPositionTime: 120,
-        positionSize: 0.05,
-        cooldownPeriod: 5,
-        color: 'indigo'
-      }
-    }
-  ];
-  
-  const timeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
-  
-  for (const strategy of defaultStrategies) {
-    for (const timeframe of timeframes) {
-      try {
-        await pool.query(
-          `INSERT INTO strategies (user_id, name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
-           VALUES ($1, $2, $3, false, $4::jsonb, $5, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-           ON CONFLICT (user_id, name, timeframe) DO NOTHING`,
-          [userId, strategy.name, strategy.type, JSON.stringify(strategy.config), timeframe]
-        );
-      } catch (error) {
-        console.error(`❌ Error creating default strategy ${strategy.name} [${timeframe}]:`, error);
-      }
-    }
-    console.log(`  ✅ ${strategy.name} created on all timeframes`);
-  }
-  
-  console.log(`✅ Default strategies created for ${userEmail}`);
-}
 
 const handler = NextAuth(authOptions);
 

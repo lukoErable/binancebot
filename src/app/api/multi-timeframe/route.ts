@@ -64,17 +64,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Reload StrategyManager to load the new strategies
+    // Add to StrategyManager without full reload (OPTIMIZED)
     const { StrategyManager } = await import('@/lib/strategy-manager');
     const strategyManager = StrategyManager.getGlobalInstance();
     if (strategyManager) {
-      await strategyManager.reloadAllData();
-      console.log(`✅ StrategyManager reloaded with new strategy "${strategyName}"`);
+      await strategyManager.addNewStrategy(baseConfig, timeframes);
+      console.log(`✅ StrategyManager updated with new strategy "${strategyName}" (instant add)`);
     }
 
     return NextResponse.json({
       success: true,
-      message: `Strategy "${strategyName}" activated on ${timeframes.length} timeframe(s)`,
+      message: `Strategy "${strategyName}" created on ${timeframes.length} timeframe(s)`,
       results
     });
   } catch (error) {

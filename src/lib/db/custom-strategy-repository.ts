@@ -9,11 +9,11 @@ export class CustomStrategyRepository {
   // Cache to avoid reloading strategies on every call
   private static cache: CustomStrategyConfig[] | null = null;
   private static cacheTimestamp: number = 0;
-  private static CACHE_TTL = 30000; // 30 seconds cache
+  private static CACHE_TTL = 5000; // 5 seconds cache (optimized for real-time updates)
   /**
    * Save a custom strategy configuration
    */
-  static async saveCustomStrategy(config: CustomStrategyConfig, userId: number = 1): Promise<void> {
+  static async saveCustomStrategy(config: CustomStrategyConfig, userEmail: string = 'system@trading.bot'): Promise<void> {
     // Serialize the entire config as JSON
     const configJson = JSON.stringify({
       description: config.description,
@@ -36,19 +36,19 @@ export class CustomStrategyRepository {
     const timeframe = config.timeframe || '1m';
     
     await db.query(`
-      INSERT INTO strategies (user_id, name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
+      INSERT INTO strategies (user_email, name, type, is_active, config, timeframe, activated_at, total_active_time, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5::jsonb, $6, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id, name, timeframe) 
+      ON CONFLICT (user_email, name, timeframe) 
       DO UPDATE SET 
         type = $3,
         config = $5::jsonb,
         updated_at = CURRENT_TIMESTAMP
-    `, [userId, config.name, config.strategyType, false, configJson, timeframe]);
+    `, [userEmail, config.name, config.strategyType, false, configJson, timeframe]);
     
     // Clear cache after saving
     this.clearCache();
     
-    console.log(`✅ Custom strategy "${config.name}" [${timeframe}] saved to database (activated_at=NULL, total_active_time=0)`);
+    console.log(`✅ Custom strategy "${config.name}" [${timeframe}] saved to database for ${userEmail} (activated_at=NULL, total_active_time=0)`);
   }
   
   /**
@@ -101,8 +101,10 @@ export class CustomStrategyRepository {
   
   /**
    * Get all custom strategies (with caching)
+   * @param useCache - Whether to use cached results
+   * @param userEmail - User email to filter by, or null to get ALL users' strategies (for daemon)
    */
-  static async getAllCustomStrategies(useCache: boolean = true, userId: number = 1): Promise<CustomStrategyConfig[]> {
+  static async getAllCustomStrategies(useCache: boolean = true, userEmail: string | null = null): Promise<CustomStrategyConfig[]> {
     // Check cache first
     const now = Date.now();
     if (useCache && this.cache && (now - this.cacheTimestamp) < this.CACHE_TTL) {
@@ -110,7 +112,10 @@ export class CustomStrategyRepository {
       return this.cache;
     }
     
-    const result = await db.query('SELECT * FROM strategies WHERE type = $1 AND user_id = $2', ['CUSTOM', userId]);
+    // If userEmail is null, get ALL custom strategies (for daemon)
+    const result = userEmail === null
+      ? await db.query('SELECT * FROM strategies WHERE type = $1 ORDER BY user_email, name', ['CUSTOM'])
+      : await db.query('SELECT * FROM strategies WHERE type = $1 AND user_email = $2', ['CUSTOM', userEmail]);
     
     const strategies: CustomStrategyConfig[] = [];
     

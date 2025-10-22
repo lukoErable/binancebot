@@ -2,9 +2,12 @@ import SharedMultiTimeframeWebSocketManager from '@/lib/shared-multi-websocket-m
 import UserSessionManager from '@/lib/user-session-manager';
 import { NextRequest } from 'next/server';
 // Initialize Trading Daemon (24/7 background trading)
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { hasStrategies, initializeDefaultStrategies } from '@/lib/default-strategies';
 import { tradingDaemon } from '@/lib/trading-daemon';
+import { getServerSession } from 'next-auth';
 
-// Map to track active user managers
+// Map to track active user managers (keyed by user email)
 const activeManagers = new Map<string, SharedMultiTimeframeWebSocketManager>();
 
 export async function GET(request: NextRequest) {
@@ -13,16 +16,40 @@ export async function GET(request: NextRequest) {
   const timeframe = searchParams.get('timeframe') || '1m';
   const trading = searchParams.get('trading') === 'true';
 
-  // Generate unique user ID from request (IP + timestamp)
-  const forwarded = request.headers.get('x-forwarded-for');
-  const ip = forwarded ? forwarded.split(',')[0] : 'localhost';
-  const userId = `${ip}_${Date.now()}`;
+  // Get authenticated user
+  const session = await getServerSession(authOptions);
+  const userId = session?.user?.email || 'anonymous';
 
   // === SSE STREAMING ===
   if (action === 'start') {
-    // Ensure daemon is running
+    // Check if user is authenticated
+    if (userId && userId.includes('@')) {
+      // Check if user has strategies, if not create default ones
+      const userHasStrategies = await hasStrategies(userId);
+      if (!userHasStrategies) {
+        console.log(`🆕 New user detected: ${userId}, creating default strategies...`);
+        await initializeDefaultStrategies(userId);
+        
+        // Add to StrategyManager without full reload (OPTIMIZED)
+        const { StrategyManager } = await import('@/lib/strategy-manager');
+        const strategyManager = StrategyManager.getGlobalInstance();
+        if (strategyManager) {
+          // Load the 3 default strategies that were just created
+          const CustomStrategyRepository = await import('@/lib/db/custom-strategy-repository');
+          const defaultConfigs = await CustomStrategyRepository.default.getAllCustomStrategies(false, userId);
+          
+          // Add each one individually (faster than reloading all 60+ strategies)
+          for (const config of defaultConfigs) {
+            await strategyManager.addNewStrategy(config, [config.timeframe || '1m']);
+          }
+          
+          console.log(`✅ Added ${defaultConfigs.length} default strategies for ${userId} (instant)`);
+        }
+      }
+    }
+    
+    // Ensure daemon is running (silently start if needed - normal in dev mode)
     if (!tradingDaemon.isActive()) {
-      console.log('⚠️  Trading Daemon not running, starting now...');
       try {
         await tradingDaemon.start();
       } catch (error) {
@@ -115,82 +142,12 @@ export async function GET(request: NextRequest) {
   // === ACTIONS ===
   
   if (action === 'stop') {
-    // Find user's manager (approximate match by IP)
-    let foundUserId: string | null = null;
-    for (const [uid, _] of activeManagers) {
-      if (uid.startsWith(ip)) {
-        foundUserId = uid;
-        break;
-      }
+    const manager = activeManagers.get(userId);
+    if (manager) {
+      await manager.disconnect();
+      activeManagers.delete(userId);
     }
-    
-    if (foundUserId) {
-      const manager = activeManagers.get(foundUserId);
-      if (manager) {
-        await manager.disconnect();
-        activeManagers.delete(foundUserId);
-      }
-    }
-    
     return Response.json({ success: true });
-  }
-
-  if (action === 'changeTimeframe') {
-    const newTimeframe = searchParams.get('timeframe') || '1m';
-    
-    // Find user's manager
-    let foundUserId: string | null = null;
-    for (const [uid, _] of activeManagers) {
-      if (uid.startsWith(ip)) {
-        foundUserId = uid;
-        break;
-      }
-    }
-    
-    if (foundUserId) {
-      const manager = activeManagers.get(foundUserId);
-      if (manager) {
-        await manager.changePrimaryTimeframe(newTimeframe);
-        return Response.json({ success: true, timeframe: newTimeframe });
-      }
-    }
-    
-    return Response.json({ error: 'Manager not found' }, { status: 404 });
-  }
-
-  if (action === 'toggleStrategy') {
-    const strategyName = searchParams.get('strategyName');
-    if (!strategyName) {
-      return Response.json({ error: 'Strategy name is required' }, { status: 400 });
-    }
-
-    // Find user's manager
-    let foundUserId: string | null = null;
-    for (const [uid, _] of activeManagers) {
-      if (uid.startsWith(ip)) {
-        foundUserId = uid;
-        break;
-      }
-    }
-    
-    if (foundUserId) {
-      const manager = activeManagers.get(foundUserId);
-      if (manager) {
-        const tf = timeframe || '1m';
-        const success = await manager.toggleStrategy(strategyName, tf);
-        
-        if (success) {
-          return Response.json({ 
-            success: true, 
-            message: `Strategy "${strategyName}" [${tf}] toggled` 
-          });
-        }
-      }
-    }
-    
-    return Response.json({ 
-      error: `Failed to toggle strategy` 
-    }, { status: 500 });
   }
 
   if (action === 'resetStrategy') {
@@ -199,32 +156,21 @@ export async function GET(request: NextRequest) {
       return Response.json({ error: 'Strategy name is required' }, { status: 400 });
     }
 
-    // Find user's manager
-    let foundUserId: string | null = null;
-    for (const [uid, _] of activeManagers) {
-      if (uid.startsWith(ip)) {
-        foundUserId = uid;
-        break;
-      }
-    }
-    
-    if (foundUserId) {
-      const manager = activeManagers.get(foundUserId);
-      if (manager) {
-        const tf = timeframe || '1m';
-        const success = await manager.resetStrategy(strategyName, tf);
-        
-        if (success) {
-          return Response.json({ 
-            success: true, 
-            message: `Strategy "${strategyName}" [${tf}] has been reset` 
-          });
-        }
+    const manager = activeManagers.get(userId);
+    if (manager) {
+      const tf = timeframe || '1m';
+      const success = await manager.resetStrategy(strategyName, tf);
+      
+      if (success) {
+        return Response.json({ 
+          success: true, 
+          message: `Strategy "${strategyName}" [${tf}] has been reset` 
+        });
       }
     }
     
     return Response.json({ 
-      error: `Failed to reset strategy` 
+      error: `Failed to reset strategy. Manager not found for user: ${userId}` 
     }, { status: 500 });
   }
 
@@ -251,26 +197,13 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { action, strategyName, timeframe, config } = body;
 
-  // Get user IP for manager lookup
-  const forwarded = request.headers.get('x-forwarded-for');
-  const ip = forwarded ? forwarded.split(',')[0] : 'localhost';
+  // Get authenticated user
+  const session = await getServerSession(authOptions);
+  const userId = session?.user?.email || 'anonymous';
   
-  // Find user's manager
-  let foundUserId: string | null = null;
-  for (const [uid, _] of activeManagers) {
-    if (uid.startsWith(ip)) {
-      foundUserId = uid;
-      break;
-    }
-  }
-  
-  if (!foundUserId) {
-    return Response.json({ error: 'No active session found' }, { status: 404 });
-  }
-  
-  const manager = activeManagers.get(foundUserId);
+  const manager = activeManagers.get(userId);
   if (!manager) {
-    return Response.json({ error: 'Manager not found' }, { status: 404 });
+    return Response.json({ error: `Manager not found for user: ${userId}` }, { status: 404 });
   }
 
   if (action === 'updateConfig' && strategyName && config) {
@@ -285,6 +218,69 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  if (action === 'toggleStrategy' && strategyName) {
+    const tf = timeframe || '1m';
+    console.log(`🔧 [POST] Toggling strategy: ${strategyName} [${tf}] for user: ${userId}`);
+    
+    try {
+      const success = await manager.toggleStrategy(strategyName, tf);
+      
+      if (success) {
+        return Response.json({ 
+          success: true, 
+          message: `Strategy "${strategyName}" [${tf}] toggled` 
+        });
+      } else {
+        // Strategy toggle failed, but frontend will still get updated via SSE
+        return Response.json({ 
+          success: false, 
+          message: `Strategy "${strategyName}" [${tf}] toggle failed, but state will refresh` 
+        });
+      }
+    } catch (error) {
+      console.error(`❌ [POST] Error toggling strategy "${strategyName}":`, error);
+      return Response.json({ 
+        success: false, 
+        message: `Error toggling strategy: ${error.message}` 
+      });
+    }
+  }
+
+  if (action === 'changeTimeframe' && timeframe) {
+    const tf = timeframe;
+    console.log(`🔄 [POST] Changing timeframe to: ${tf} for user: ${userId}`);
+    
+    await manager.changePrimaryTimeframe(tf);
+    
+    return Response.json({ 
+      success: true, 
+      timeframe: tf 
+    });
+  }
+
+  if (action === 'resetStrategy' && strategyName) {
+    const tf = timeframe || '1m';
+    console.log(`🔄 [POST] Resetting strategy: ${strategyName} [${tf}] for user: ${userId}`);
+    
+    const success = await manager.resetStrategy(strategyName, tf);
+    
+    if (success) {
+      return Response.json({ 
+        success: true, 
+        message: `Strategy "${strategyName}" [${tf}] has been reset` 
+      });
+    } else {
+      return Response.json({ 
+        error: `Failed to reset strategy` 
+      }, { status: 500 });
+    }
+  }
+
+  console.error(`❌ [POST] Unknown action: "${action}" or missing parameters`);
+  console.error(`   - strategyName: ${strategyName}`);
+  console.error(`   - timeframe: ${timeframe}`);
+  console.error(`   - config: ${config ? 'present' : 'missing'}`);
+  
   return Response.json({ error: 'Unknown action or missing parameters' }, { status: 400 });
 }
 

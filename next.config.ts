@@ -8,10 +8,6 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  // Enable instrumentation for background services
-  experimental: {
-    instrumentationHook: true,
-  },
 };
 
 export default nextConfig;

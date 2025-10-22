@@ -14,10 +14,15 @@ import { StrategyManager } from './strategy-manager';
 interface DaemonStats {
   startTime: number;
   uptime: number;
+  uptimeMinutes: number;
   totalAnalyses: number;
   tradesExecuted: number;
   activeWebSockets: number;
   activeStrategies: number;
+  memoryUsageMB: number;
+  dbPoolTotal: number;
+  dbPoolIdle: number;
+  dbPoolActive: number;
 }
 
 class TradingDaemon {
@@ -72,7 +77,7 @@ class TradingDaemon {
     this.startStrategyAnalysis();
     
     console.log('✅ TradingDaemon: Running! Strategies will execute 24/7');
-    this.logStatus();
+    await this.logStatus();
   }
   
   /**
@@ -219,17 +224,32 @@ class TradingDaemon {
   /**
    * Get daemon statistics
    */
-  getStats(): DaemonStats {
+  async getStats(): Promise<DaemonStats> {
     const uptime = this.isRunning ? Date.now() - this.startTime : 0;
+    const uptimeMinutes = Math.floor(uptime / 1000 / 60);
     const activeStrategies = this.strategyManager?.getAllPerformances().filter(p => p.isActive).length || 0;
+    
+    // Memory usage
+    const memoryUsageMB = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    
+    // DB pool stats
+    const { pool } = await import('./db/database');
+    const dbPoolTotal = pool.totalCount;
+    const dbPoolIdle = pool.idleCount;
+    const dbPoolActive = dbPoolTotal - dbPoolIdle;
     
     return {
       startTime: this.startTime,
       uptime,
+      uptimeMinutes,
       totalAnalyses: this.totalAnalyses,
       tradesExecuted: this.tradesExecuted,
       activeWebSockets: this.websockets.size,
-      activeStrategies
+      activeStrategies,
+      memoryUsageMB,
+      dbPoolTotal,
+      dbPoolIdle,
+      dbPoolActive
     };
   }
   
@@ -243,14 +263,16 @@ class TradingDaemon {
   /**
    * Log current status
    */
-  private logStatus(): void {
-    const stats = this.getStats();
+  private async logStatus(): Promise<void> {
+    const stats = await this.getStats();
     console.log(`
 ╔════════════════════════════════════════════════════════════════
 ║ 🤖 TRADING DAEMON STATUS
 ╠════════════════════════════════════════════════════════════════
 ║ Status: ${this.isRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
-║ Uptime: ${Math.floor(stats.uptime / 1000 / 60)} minutes
+║ Uptime: ${stats.uptimeMinutes} minutes
+║ Memory: ${stats.memoryUsageMB} MB
+║ DB Pool: ${stats.dbPoolActive} active / ${stats.dbPoolTotal} total (${stats.dbPoolIdle} idle)
 ║ Active WebSockets: ${stats.activeWebSockets}/6
 ║ Active Strategies: ${stats.activeStrategies}
 ║ Total Analyses: ${stats.totalAnalyses}

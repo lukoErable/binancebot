@@ -1,5 +1,6 @@
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import StrategyRepository from '@/lib/db/strategy-repository';
-import { getGlobalStrategyManager } from '@/lib/websocket-manager';
+import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
@@ -8,8 +9,19 @@ import { NextRequest, NextResponse } from 'next/server';
  */
 export async function PUT(request: NextRequest) {
   try {
+    // Get authenticated user
+    const session = await getServerSession(authOptions);
+    const userEmail = session?.user?.email;
+
+    if (!userEmail) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
-    const { strategyName, config } = body;
+    const { strategyName, config, timeframe } = body;
 
     if (!strategyName || !config) {
       return NextResponse.json(
@@ -40,19 +52,22 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const tf = timeframe || '1m';
+
     // Update in database (persistent)
-    await StrategyRepository.updateStrategyConfig(strategyName, config);
+    await StrategyRepository.updateStrategyConfig(strategyName, config, tf);
 
     // Apply changes to running strategy (hot reload)
-    const strategyManager = getGlobalStrategyManager();
+    const { StrategyManager } = await import('@/lib/strategy-manager');
+    const strategyManager = StrategyManager.getGlobalInstance();
     if (strategyManager) {
-      strategyManager.updateStrategyConfig(strategyName, config);
-      console.log(`🔥 Hot reload: Config applied to running strategy "${strategyName}"`);
+      strategyManager.updateStrategyConfig(strategyName, config, tf);
+      console.log(`🔥 Hot reload: Config applied to running strategy "${strategyName}" [${tf}] for ${userEmail}`);
     }
 
     return NextResponse.json({
       success: true,
-      message: `Configuration updated for ${strategyName}`,
+      message: `Configuration updated for ${strategyName} [${tf}]`,
       config,
       appliedToRunning: strategyManager !== null
     });

@@ -97,10 +97,11 @@ class SharedBinanceWebSocket {
       // Calculate initial indicators
       if (this.candles.length >= 200) {
         const indicatorValues = this.indicators.calculate(this.candles);
+        const lastCandle = this.candles[this.candles.length - 1];
         this.latestData = {
           candles: this.candles,
           indicators: indicatorValues,
-          currentPrice: this.candles[this.candles.length - 1].close,
+          currentPrice: lastCandle?.close ?? 0,
           timeframe: this.timeframe,
           lastUpdate: Date.now()
         };
@@ -185,7 +186,7 @@ class SharedBinanceWebSocket {
           this.latestData = {
             candles: this.candles,
             indicators: indicatorValues,
-            currentPrice: newCandle.close,
+            currentPrice: newCandle.close ?? 0,
             timeframe: this.timeframe,
             lastUpdate: Date.now()
           };

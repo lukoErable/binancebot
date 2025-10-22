@@ -1,7 +1,7 @@
 import { StrategyState } from '@/types/trading';
 import SharedBinanceWebSocket from './shared-binance-websocket';
+import { StrategyManager } from './strategy-manager';
 import UserSessionManager from './user-session-manager';
-import { getGlobalStrategyManager } from './websocket-manager';
 
 /**
  * Shared Multi-Timeframe WebSocket Manager
@@ -57,7 +57,9 @@ export class SharedMultiTimeframeWebSocketManager {
     }
     
     if (!strategyManager) {
-      console.log(`⚠️  [USER ${this.userId}] Still no strategy manager, subscribing to primary timeframe only`);
+      console.error(`❌ [USER ${this.userId}] StrategyManager not initialized after retries!`);
+      // Still store null ref and continue - templates might load later
+      this.strategyManagerRef = null;
       await this.subscribeToTimeframe(primaryTimeframe);
       this.startPeriodicUpdates();
       return;
@@ -153,24 +155,66 @@ export class SharedMultiTimeframeWebSocketManager {
       return;
     }
     
+    // Debug: Check currentPrice value
+    if (primaryData.currentPrice === undefined || primaryData.currentPrice === null) {
+      console.error(`❌ [USER ${this.userId}] currentPrice is ${primaryData.currentPrice} in primaryData:`, {
+        currentPrice: primaryData.currentPrice,
+        candlesLength: primaryData.candles?.length,
+        lastCandle: primaryData.candles?.[primaryData.candles.length - 1],
+        indicators: primaryData.indicators ? 'present' : 'missing'
+      });
+    }
+    
     // Get strategy performances for THIS user
     // Use stored reference instead of calling getGlobalStrategyManager() which may return null in SSE context
     let strategyPerformances: any[] = [];
     
     if (this.strategyManagerRef) {
-      // Get ALL performances (user-specific filtering would go here)
-      strategyPerformances = this.strategyManagerRef.getAllPerformances();
+      // Get ALL performances and filter by userEmail
+      const allPerformances = this.strategyManagerRef.getAllPerformances();
+      
+      // Filter by userEmail based on authentication status
+      if (this.userId && this.userId.includes('@') && this.userId !== 'anonymous') {
+        // Authenticated user: show ONLY their strategies
+        strategyPerformances = allPerformances.filter((perf: any) => perf.userEmail === this.userId);
+      } else {
+        // Anonymous user: show ONLY template strategies (for demo/preview)
+        strategyPerformances = allPerformances.filter((perf: any) => perf.userEmail === 'template@system');
+        
+        // Force all templates to be inactive (no trading for anonymous users!)
+        strategyPerformances = strategyPerformances.map(perf => ({
+          ...perf,
+          isActive: false
+        }));
+      }
       
       // Debug log first time
       if (strategyPerformances.length > 0 && !this.hasLoggedStrategies) {
-        console.log(`📊 [USER ${this.userId}] Sending ${strategyPerformances.length} strategies to frontend`);
+        const userType = this.userId && this.userId.includes('@') && this.userId !== 'anonymous' ? 'authenticated' : 'anonymous';
+        console.log(`📊 [USER ${this.userId}] (${userType}) Sending ${strategyPerformances.length} strategies to frontend (filtered from ${allPerformances.length} total)`);
         this.hasLoggedStrategies = true;
       }
     } else {
-      // Fallback to global getter if reference not set
-      const strategyManager = getGlobalStrategyManager();
-      if (strategyManager) {
-        strategyPerformances = strategyManager.getAllPerformances();
+      // Reference not set - try to get it now
+      this.strategyManagerRef = StrategyManager.getGlobalInstance();
+      
+      if (this.strategyManagerRef) {
+        const allPerformances = this.strategyManagerRef.getAllPerformances();
+        
+        if (this.userId && this.userId.includes('@') && this.userId !== 'anonymous') {
+          strategyPerformances = allPerformances.filter((perf: any) => perf.userEmail === this.userId);
+        } else {
+          // Anonymous: templates only
+          strategyPerformances = allPerformances
+            .filter((perf: any) => perf.userEmail === 'template@system')
+            .map((perf: any) => ({ ...perf, isActive: false }));
+        }
+        
+        if (strategyPerformances.length > 0 && !this.hasLoggedStrategies) {
+          const userType = this.userId && this.userId.includes('@') && this.userId !== 'anonymous' ? 'authenticated' : 'anonymous';
+          console.log(`📊 [USER ${this.userId}] (${userType}) Sending ${strategyPerformances.length} strategies to frontend (filtered from ${allPerformances.length} total)`);
+          this.hasLoggedStrategies = true;
+        }
       } else {
         console.log(`⚠️  [USER ${this.userId}] No StrategyManager available`);
       }
@@ -178,8 +222,14 @@ export class SharedMultiTimeframeWebSocketManager {
     
     // Build state for this user with ALL indicators from shared data
     const ind = primaryData.indicators;
+    
+    // Fallback for currentPrice if undefined
+    const currentPrice = primaryData.currentPrice ?? 
+                        (primaryData.candles && primaryData.candles.length > 0 ? 
+                         primaryData.candles[primaryData.candles.length - 1].close : 0);
+    
     const state: StrategyState = {
-      currentPrice: primaryData.currentPrice,
+      currentPrice: currentPrice,
       candles: primaryData.candles,
       
       // Basic indicators (legacy)
@@ -308,29 +358,53 @@ export class SharedMultiTimeframeWebSocketManager {
    * Toggle strategy (delegate to StrategyManager)
    */
   async toggleStrategy(strategyName: string, timeframe?: string): Promise<boolean> {
-    const strategyManager = getGlobalStrategyManager();
-    if (!strategyManager) {
-      console.error('No strategy manager found');
+    try {
+      // Use stored reference instead of StrategyManager.getGlobalInstance()
+      const strategyManager = this.strategyManagerRef || StrategyManager.getGlobalInstance();
+      if (!strategyManager) {
+        console.error(`❌ [USER ${this.userId}] No strategy manager found (ref: ${!!this.strategyManagerRef}, global: ${!!StrategyManager.getGlobalInstance()})`);
+        return false;
+      }
+      
+      const tf = timeframe || this.primaryTimeframe;
+      const newState = await strategyManager.toggleStrategy(strategyName, tf);
+      
+      console.log(`✅ [USER ${this.userId}] Strategy "${strategyName}" [${tf}] is now ${newState ? 'ACTIVE' : 'INACTIVE'}`);
+      
+      // Send immediate update to frontend via SSE (always, even if toggle failed)
+      this.sendCombinedState();
+      
+      return newState;
+    } catch (error) {
+      console.error(`❌ [USER ${this.userId}] Error toggling strategy "${strategyName}":`, error);
+      
+      // Still send update to frontend to refresh state
+      this.sendCombinedState();
+      
       return false;
     }
-    
-    const tf = timeframe || this.primaryTimeframe;
-    const newState = await strategyManager.toggleStrategy(strategyName, tf);
-    
-    console.log(`✅ [USER ${this.userId}] Strategy "${strategyName}" [${tf}] is now ${newState ? 'ACTIVE' : 'INACTIVE'}`);
-    
-    return newState;
   }
   
   /**
    * Reset strategy
    */
   async resetStrategy(strategyName: string, timeframe?: string): Promise<boolean> {
-    const strategyManager = getGlobalStrategyManager();
-    if (!strategyManager) return false;
+    // Use stored reference instead of StrategyManager.getGlobalInstance()
+    const strategyManager = this.strategyManagerRef || StrategyManager.getGlobalInstance();
+    if (!strategyManager) {
+      console.error(`❌ [USER ${this.userId}] No strategy manager found for reset`);
+      return false;
+    }
     
     const tf = timeframe || this.primaryTimeframe;
-    return await strategyManager.resetStrategy(strategyName, tf);
+    const success = await strategyManager.resetStrategy(strategyName, tf);
+    
+    if (success) {
+      // Send immediate update to frontend via SSE
+      this.sendCombinedState();
+    }
+    
+    return success;
   }
   
   /**
@@ -341,11 +415,22 @@ export class SharedMultiTimeframeWebSocketManager {
     config: any,
     timeframe?: string
   ): boolean {
-    const strategyManager = getGlobalStrategyManager();
-    if (!strategyManager) return false;
+    // Use stored reference instead of StrategyManager.getGlobalInstance()
+    const strategyManager = this.strategyManagerRef || StrategyManager.getGlobalInstance();
+    if (!strategyManager) {
+      console.error(`❌ [USER ${this.userId}] No strategy manager found for config update`);
+      return false;
+    }
     
     const tf = timeframe || this.primaryTimeframe;
-    return strategyManager.updateStrategyConfig(strategyName, config, tf);
+    const success = strategyManager.updateStrategyConfig(strategyName, config, tf);
+    
+    if (success) {
+      // Send immediate update to frontend via SSE
+      this.sendCombinedState();
+    }
+    
+    return success;
   }
   
   /**

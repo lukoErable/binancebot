@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 class Database {
   private static instance: Database;
   private pool: Pool;
+  private hasLoggedConnection: boolean = false;
 
   private constructor() {
     this.pool = new Pool({
@@ -12,17 +13,20 @@ class Database {
       database: process.env.DB_NAME || 'tradingbot_db',
       user: process.env.DB_USER || 'tradingbot_user',
       password: process.env.DB_PASSWORD || 'tradingbot_secure_2024',
-      max: 100, // Increased from 20 to 100 for multi-timeframe support
-      min: 10, // Keep minimum 10 connections ready (increased from 5)
-      idleTimeoutMillis: 60000, // Increased to 60 seconds
-      connectionTimeoutMillis: 10000, // Increased to 10 seconds
+      max: 20, // Conservative pool size (PostgreSQL has max 100 connections total)
+      min: 5, // Keep minimum 5 connections ready
+      idleTimeoutMillis: 30000, // 30 seconds idle timeout
+      connectionTimeoutMillis: 5000, // 5 seconds connection timeout
       maxUses: 7500, // Close connections after 7500 uses to prevent memory leaks
       allowExitOnIdle: true, // Allow pool to shrink when idle
     });
 
     // Test connection and warm up pool
     this.pool.on('connect', () => {
-      console.log('✅ Connected to PostgreSQL database');
+      if (!this.hasLoggedConnection) {
+        console.log('✅ Connected to PostgreSQL database');
+        this.hasLoggedConnection = true;
+      }
     });
 
     this.pool.on('error', (err) => {
