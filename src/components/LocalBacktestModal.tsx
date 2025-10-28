@@ -41,7 +41,7 @@ export default function LocalBacktestModal({
     if (isOpen) {
       loadAvailableData();
     }
-  }, [isOpen]);
+  }, [isOpen, loadAvailableData]);
 
   const loadAvailableData = async () => {
     try {

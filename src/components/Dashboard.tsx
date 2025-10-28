@@ -5,8 +5,6 @@ import { StrategyPerformance, StrategyState } from '@/types/trading';
 import { signIn, useSession } from 'next-auth/react';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  HiArrowRight,
-  HiArrowUp,
   HiChartBar,
   HiCheck,
   HiCheckCircle,
@@ -15,9 +13,6 @@ import {
   HiCog,
   HiExclamationCircle,
   HiLightningBolt,
-  HiStop,
-  HiTrendingDown,
-  HiTrendingUp,
   HiXCircle
 } from 'react-icons/hi';
 import {
@@ -31,6 +26,8 @@ import {
 } from './SkeletonLoader';
 import StrategyPanel from './StrategyPanel';
 import UserAuth from './UserAuth';
+
+type StrategyType = 'RSI_EMA' | 'MOMENTUM_CROSSOVER' | 'VOLUME_MACD' | 'BOLLINGER_BOUNCE' | 'TREND_FOLLOWER' | 'ATR_PULLBACK' | 'CUSTOM';
 
 // Lazy load heavy components for better performance
 const LazyBinanceChart = lazy(() => import('./BinanceChart'));
@@ -61,7 +58,7 @@ export default function Dashboard() {
   const [localConfigCache, setLocalConfigCache] = useState<Record<string, { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }>>({});
   const [selectedStrategy, setSelectedStrategy] = useState<string>('GLOBAL'); // 'GLOBAL' or strategy name
   const [showStrategyBuilder, setShowStrategyBuilder] = useState(false);
-  const [editingStrategy, setEditingStrategy] = useState<{ name: string; config: any } | null>(null);
+  const [editingStrategy, setEditingStrategy] = useState<{ name: string; config: CustomStrategyConfig } | null>(null);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [isStatsSticky, setIsStatsSticky] = useState(false);
   const statsSentinelRef = useRef<HTMLDivElement>(null);
@@ -145,7 +142,7 @@ export default function Dashboard() {
         window.tradingEventSource.close();
       }
     };
-  }, [status, isFirstLoad]); // Restart SSE when auth status changes OR after first load completes
+  }, [status, isFirstLoad, selectedTimeframe]); // Restart SSE when auth status changes OR after first load completes
 
   // Detect when stats bar becomes sticky using IntersectionObserver
   useEffect(() => {
@@ -300,26 +297,6 @@ export default function Dashboard() {
     }
   };
 
-
-  const stopDataStream = async (keepData: boolean = false) => {
-    try {
-      // Close SSE connection
-      if (window.tradingEventSource) {
-        window.tradingEventSource.close();
-        window.tradingEventSource = undefined;
-      }
-
-      await fetch('/api/trading-shared?action=stop');
-      setIsConnected(false);
-      
-      // Only clear data if not restarting (for smooth transition when adding new strategies)
-      if (!keepData) {
-        setTimeframeStates({});
-      }
-    } catch (error) {
-      console.error('Error stopping data stream:', error);
-    }
-  };
 
 
 
@@ -488,7 +465,7 @@ export default function Dashboard() {
       // Préparer le contexte des stratégies existantes (UNIQUEMENT de la timeframe actuelle)
       const existingStrategies = filteredStrategyPerformances.map(perf => {
         // Extraire les conditions principales si disponibles
-        const criteria = getCriteriaForStrategy?.(perf.strategyType as any, perf);
+        const criteria = getCriteriaForStrategy?.(perf.strategyType as StrategyType, perf);
         
         // Extract color from customConfig for CUSTOM strategies
         const color = perf.strategyType === 'CUSTOM' && perf.customConfig?.color 
@@ -519,7 +496,7 @@ export default function Dashboard() {
       let aiData;
       try {
         aiData = await aiResponse.json();
-      } catch (jsonError: any) {
+      } catch (jsonError: unknown) {
         console.error('Failed to parse AI response:', jsonError);
         throw new Error('Invalid response from AI API');
       }
@@ -562,7 +539,7 @@ export default function Dashboard() {
       } else {
         console.error(`Error saving: ${saveData.error || 'Failed to save strategy'}`);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error generating AI strategy:', error);
     } finally {
       setIsGeneratingAI(false);
@@ -662,9 +639,6 @@ export default function Dashboard() {
     const numValue = typeof value === 'number' ? value : parseFloat(value);
     return isNaN(numValue) ? '0.00' : numValue.toFixed(2);
   };
-  const formatTime = (timestamp: number) => {
-    return new Date(timestamp).toLocaleTimeString('fr-FR');
-  };
 
   // Filter strategies by selected timeframe
   // EVERYTHING (stats + trades + positions) = CURRENT timeframe ONLY
@@ -696,40 +670,10 @@ export default function Dashboard() {
       });
   }, [strategyPerformances, selectedTimeframe]);
 
-  const getSignalColor = (type: 'BUY' | 'SELL' | 'HOLD' | 'CLOSE_LONG' | 'CLOSE_SHORT') => {
-    switch (type) {
-      case 'BUY': return 'bg-green-500';
-      case 'SELL': return 'bg-red-500';
-      case 'CLOSE_LONG': return 'bg-orange-500';
-      case 'CLOSE_SHORT': return 'bg-cyan-500';
-      case 'HOLD': return 'bg-gray-500';
-    }
-  };
-
-  const getSignalIcon = (type: 'BUY' | 'SELL' | 'HOLD' | 'CLOSE_LONG' | 'CLOSE_SHORT') => {
-    switch (type) {
-      case 'BUY': return <HiTrendingUp className="w-4 h-4" />;
-      case 'SELL': return <HiTrendingDown className="w-4 h-4" />;
-      case 'CLOSE_LONG': return <HiXCircle className="w-4 h-4 text-red-500" />;
-      case 'CLOSE_SHORT': return <HiCheckCircle className="w-4 h-4 text-green-500" />;
-      case 'HOLD': return <HiStop className="w-4 h-4" />;
-    }
-  };
-
   const getRSIColor = (rsi: number) => {
     if (rsi < 30) return 'text-green-500 font-bold';
     if (rsi > 70) return 'text-red-500 font-bold';
     return 'text-yellow-500';
-  };
-
-  const getEMAStatus = () => {
-    if (!state) return null;
-    if (state.ema50 > state.ema200) {
-      return <span className="text-green-500 flex items-center gap-1"><HiArrowUp className="w-4 h-4" /> Tendance haussière</span>;
-    } else if (state.ema50 < state.ema200) {
-      return <span className="text-red-500 flex items-center gap-1"><HiTrendingDown className="w-4 h-4" /> Tendance baissière</span>;
-    }
-    return <span className="text-gray-500 flex items-center gap-1"><HiArrowRight className="w-4 h-4" /> Neutre</span>;
   };
 
   // Get criteria for a specific strategy type
@@ -2824,8 +2768,8 @@ export default function Dashboard() {
               onRefresh={onRefresh}
               onToggleRL={handleToggleRL}
               rlEnabledStrategies={rlEnabledStrategies}
-              advancedIndicators={state}
-              basicIndicators={state}
+              advancedIndicators={state as unknown as Record<string, unknown>}
+              basicIndicators={state as unknown as Record<string, unknown>}
               triggerIndicatorsOverlay={triggerIndicatorsOverlay}
               onIndicatorsOverlayTriggered={() => setTriggerIndicatorsOverlay(false)}
               triggerAdvancedIndicatorsOverlay={triggerAdvancedIndicatorsOverlay}
@@ -3024,7 +2968,7 @@ export default function Dashboard() {
               }}
               onEditStrategy={(strategyName, config) => {
                 // Ouvrir l'éditeur de stratégie avec la configuration existante
-                setEditingStrategy({ name: strategyName, config });
+                setEditingStrategy({ name: strategyName, config: config as CustomStrategyConfig });
                 setShowStrategyBuilder(true);
               }}
             />

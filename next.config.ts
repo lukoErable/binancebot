@@ -21,6 +21,7 @@ const nextConfig: NextConfig = {
   // Image optimization
   images: {
     formats: ['image/webp', 'image/avif'],
+    domains: ['lh3.googleusercontent.com'],
   },
   
   // Bundle optimization

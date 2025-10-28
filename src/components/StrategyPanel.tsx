@@ -1,5 +1,7 @@
 'use client';
 
+import { Condition, ConditionGroup } from '@/lib/condition-system';
+import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { BacktestResult, StrategyPerformance } from '@/types/trading';
 import { useEffect, useRef, useState } from 'react';
 import { BiDownArrow, BiSquare, BiUpArrow } from 'react-icons/bi';
@@ -185,15 +187,15 @@ interface StrategyPanelProps {
   isGeneratingAI?: boolean;
   onCreateStrategy?: () => void;
   indicatorData?: IndicatorPanelData | null;
-  advancedIndicators?: any;
-  basicIndicators?: any;
+  advancedIndicators?: Record<string, unknown>;
+  basicIndicators?: Record<string, unknown>;
   triggerIndicatorsOverlay?: boolean;
   onIndicatorsOverlayTriggered?: () => void;
   triggerAdvancedIndicatorsOverlay?: boolean;
   onAdvancedIndicatorsOverlayTriggered?: () => void;
   onDeleteStrategy?: (strategyName: string) => void;
   onShowTimeframeComparison?: (strategyName: string) => void;
-  onEditStrategy?: (strategyName: string, config: any) => void;
+  onEditStrategy?: (strategyName: string, config: CustomStrategyConfig) => void;
   onToggleRL?: (strategyName: string, timeframe: string) => void;
   rlEnabledStrategies?: Set<string>; // Strategies with RL enabled (format: "strategyName:timeframe")
 }
@@ -217,10 +219,8 @@ export default function StrategyPanel({
   onCreateStrategy,
   indicatorData,
   advancedIndicators,
-  basicIndicators,
   triggerIndicatorsOverlay,
   onIndicatorsOverlayTriggered,
-  onDeleteStrategy,
   onShowTimeframeComparison,
   onEditStrategy,
   onToggleRL,
@@ -273,10 +273,25 @@ export default function StrategyPanel({
   const [showLocalBacktestModal, setShowLocalBacktestModal] = useState(false);
   const [selectedStrategyForLocalBacktest, setSelectedStrategyForLocalBacktest] = useState<string | null>(null);
   const [selectedTimeframeForLocalBacktest, setSelectedTimeframeForLocalBacktest] = useState<string>('1m');
-  const [localBacktestResults, setLocalBacktestResults] = useState<BacktestResult | null>(null);
   
   // Action buttons expanded state
   const [expandedActionButtons, setExpandedActionButtons] = useState<Set<string>>(new Set());
+  
+  // Reset to page 1 when search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [strategySearch, sortMode]);
+
+  // Memory optimization: Clean up unused state when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clear any pending timeouts or intervals
+      setFlippedCards(new Set());
+      setExpandedSections({});
+      setCollapsedCategories(new Set());
+      setExpandedIndicators(new Set());
+    };
+  }, []);
   
   const toggleActionButtons = (strategyName: string) => {
     setExpandedActionButtons(prev => {
@@ -570,7 +585,7 @@ export default function StrategyPanel({
     return () => {
       clearInterval(timer);
     };
-  }, []); // Empty deps - only runs once on mount, uses ref for latest data
+  }, [INDICATOR_CATEGORIES]); // Empty deps - only runs once on mount, uses ref for latest data
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -595,7 +610,7 @@ export default function StrategyPanel({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [dragging]);
+  }, [dragging, overlayPos.x, overlayPos.y]);
   const [tempSettings, setTempSettings] = useState<{
     profitTarget: number;
     stopLoss: number;
@@ -619,23 +634,6 @@ export default function StrategyPanel({
     enableCooldown?: boolean;
   }>>({});
 
-  const toggleCardFlip = (strategyName: string) => {
-    // Fermer Settings si ouvert
-    if (settingsOpen === strategyName) {
-      setSettingsOpen(null);
-    }
-    
-    setFlippedCards(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(strategyName)) {
-        newSet.delete(strategyName);
-      } else {
-        newSet.add(strategyName);
-      }
-      return newSet;
-    });
-  };
-
   const toggleSection = (strategyName: string, sectionName: string) => {
     setExpandedSections(prev => {
       const newState = { ...prev };
@@ -658,12 +656,12 @@ export default function StrategyPanel({
   };
 
   // Format exit conditions with visual indicators
-  const formatExitConditionsCompact = (conditions?: any): string => {
+  const formatExitConditionsCompact = (conditions?: ConditionGroup): string => {
     if (!conditions || !conditions.conditions || conditions.conditions.length === 0) {
       return 'TP/SL';
     }
 
-    const formatCondition = (cond: any): string => {
+    const formatCondition = (cond: Condition | ConditionGroup): string => {
       if ('operator' in cond && 'conditions' in cond) {
         const nestedParts = cond.conditions.map(formatCondition).filter(Boolean);
         const nestedOp = cond.operator === 'AND' ? ' + ' : ' | ';
@@ -761,8 +759,6 @@ export default function StrategyPanel({
       return evaluateCondition(group);
     };
 
-    const allMet = evaluateGroup(conditions);
-    
     // Format condition with current values for tooltip
     const formatConditionTooltip = (cond: any): string => {
       if (!indicatorData) return 'No data';
@@ -1238,7 +1234,6 @@ export default function StrategyPanel({
   };
 
   const handleLocalBacktestComplete = (result: BacktestResult) => {
-    setLocalBacktestResults(result);
     console.log('Local backtest completed:', result);
   };
 
@@ -1563,22 +1558,6 @@ export default function StrategyPanel({
   const startIndex = (currentPage - 1) * strategiesPerPage;
   const endIndex = startIndex + strategiesPerPage;
   const paginatedPerformances = sortedPerformances.slice(startIndex, endIndex);
-  
-  // Reset to page 1 when search changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [strategySearch, sortMode]);
-
-  // Memory optimization: Clean up unused state when component unmounts
-  useEffect(() => {
-    return () => {
-      // Clear any pending timeouts or intervals
-      setFlippedCards(new Set());
-      setExpandedSections({});
-      setCollapsedCategories(new Set());
-      setExpandedIndicators(new Set());
-    };
-  }, []);
 
   // Find best strategy (safe with empty array)
   const bestStrategy = performances.length > 0 
@@ -2386,7 +2365,7 @@ export default function StrategyPanel({
       {sortedPerformances.length === 0 ? (
         <div className="px-4 pb-4 text-center py-12">
           <HiSearch className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">No strategies found matching "{strategySearch}"</p>
+          <p className="text-gray-400 text-sm">No strategies found matching &quot;{strategySearch}&quot;</p>
           <button
             onClick={() => setStrategySearch('')}
             className="mt-4 px-4 py-2 bg-gray-800/50 hover:bg-gray-700/50 border border-gray-700 rounded-lg text-xs text-gray-300 transition-colors"
@@ -3567,7 +3546,6 @@ export default function StrategyPanel({
           onClose={() => {
             setShowLocalBacktestModal(false);
             setSelectedStrategyForLocalBacktest(null);
-            setLocalBacktestResults(null);
           }}
           strategyName={selectedStrategyForLocalBacktest}
           timeframe={selectedTimeframeForLocalBacktest}
