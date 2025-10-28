@@ -263,3 +263,70 @@ export interface StrategyPerformance {
   isMomentumStrong?: boolean;
 }
 
+export interface BacktestConfig {
+  strategyName: string;
+  timeframe: string;
+  startDate: string; // ISO date string
+  endDate: string; // ISO date string
+  initialCapital: number;
+  positionSize: number;
+  symbol: string; // Default: 'BTCUSDT'
+}
+
+export interface BacktestResult {
+  strategyName: string;
+  timeframe: string;
+  startDate: string;
+  endDate: string;
+  initialCapital: number;
+  finalCapital: number;
+  totalReturn: number;
+  totalReturnPercent: number;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRate: number;
+  averageWin: number;
+  averageLoss: number;
+  profitFactor: number;
+  maxDrawdown: number;
+  maxDrawdownPercent: number;
+  sharpeRatio: number;
+  completedTrades: CompletedTrade[];
+  equityCurve: Array<{
+    timestamp: number;
+    capital: number;
+    pnl: number;
+  }>;
+  monthlyReturns: Array<{
+    month: string;
+    return: number;
+    returnPercent: number;
+  }>;
+  performanceMetrics: {
+    bestTrade: number;
+    worstTrade: number;
+    largestWin: number;
+    largestLoss: number;
+    consecutiveWins: number;
+    consecutiveLosses: number;
+    averageTradeDuration: number;
+    totalFees: number;
+  };
+}
+
+export interface HistoricalDataInfo {
+  symbol: string;
+  timeframe: string;
+  startDate: string;
+  endDate: string;
+  totalCandles: number;
+  fileSize: string;
+  lastUpdated: string;
+}
+
+export interface AvailableDataSets {
+  datasets: HistoricalDataInfo[];
+  totalSize: string;
+}
+

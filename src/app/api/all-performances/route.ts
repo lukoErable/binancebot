@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
       (perf: any) => perf.userEmail === userEmail
     );
 
-    console.log(`📊 [ALL-PERFORMANCES] Returning ${userPerformances.length} strategies for ${userEmail} (filtered from ${allPerformances.length} total)`);
+    console.log(`[ALL-PERFORMANCES] Returning ${userPerformances.length} strategies for ${userEmail} (filtered from ${allPerformances.length} total)`);
 
     return NextResponse.json({
       success: true,

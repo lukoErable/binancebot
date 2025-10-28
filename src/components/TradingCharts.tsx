@@ -2,6 +2,7 @@
 
 import { StrategyState } from '@/types/trading';
 import { useState } from 'react';
+import { HiChartBar, HiEye, HiEyeOff, HiTrendingDown, HiTrendingUp } from 'react-icons/hi';
 import {
     Area,
     Bar,
@@ -131,7 +132,7 @@ export default function TradingCharts({ state }: TradingChartsProps) {
   const margin = Math.max(priceRange * 0.5, minVariation); // 50% de marge pour voir les mouvements
   
   // Debug pour voir les valeurs
-  console.log('📊 Prix debug:', {
+  console.log('Prix debug:', {
     minPrice: minPrice.toFixed(2),
     maxPrice: maxPrice.toFixed(2),
     avgPrice: avgPrice.toFixed(2),
@@ -276,36 +277,40 @@ export default function TradingCharts({ state }: TradingChartsProps) {
         <div className="flex gap-1">
           <button
             onClick={focusOnBTC}
-            className="px-2 py-1 text-xs bg-yellow-400 text-black rounded font-medium"
+            className="px-2 py-1 text-xs bg-yellow-400 text-black rounded font-medium flex items-center gap-1"
           >
+            <HiTrendingUp className="w-3 h-3" />
             BTC
           </button>
           <button
             onClick={showAllCurves}
-            className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+            className="px-2 py-1 text-xs text-gray-400 hover:text-white flex items-center gap-1"
           >
+            <HiEye className="w-3 h-3" />
             All
           </button>
         </div>
         <div className="flex gap-1">
           <button
             onClick={() => setShowCandlesticks(!showCandlesticks)}
-            className={`px-2 py-1 text-xs rounded font-medium ${
+            className={`px-2 py-1 text-xs rounded font-medium flex items-center gap-1 ${
               showCandlesticks 
                 ? 'bg-green-600 text-white' 
                 : 'text-gray-400 hover:text-white'
             }`}
           >
+            <HiChartBar className="w-3 h-3" />
             Candles
           </button>
           <button
             onClick={() => setShowPercentage(!showPercentage)}
-            className={`px-2 py-1 text-xs rounded font-medium ${
+            className={`px-2 py-1 text-xs rounded font-medium flex items-center gap-1 ${
               showPercentage 
                 ? 'bg-blue-600 text-white' 
                 : 'text-gray-400 hover:text-white'
             }`}
           >
+            <HiTrendingDown className="w-3 h-3" />
             %
           </button>
         </div>
@@ -511,6 +516,11 @@ export default function TradingCharts({ state }: TradingChartsProps) {
                   : 'text-gray-400 hover:text-white'
               }`}
             >
+              {visibleLines[config.key] ? (
+                <HiEye className="w-3 h-3" />
+              ) : (
+                <HiEyeOff className="w-3 h-3" />
+              )}
               <div
                 className="w-3 h-0.5"
                 style={{

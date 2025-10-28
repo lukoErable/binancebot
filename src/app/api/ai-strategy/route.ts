@@ -10,119 +10,210 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// All available indicators with descriptions
-const AVAILABLE_INDICATORS = `
-### Price & Volume
-- price: Current price
-- open, high, low: OHLC data
-- volume: Trading volume
-- volumeSMA20: 20-period volume average
-- volumeRatio: Current volume vs average
-- vwap: Volume Weighted Average Price
+// COMPREHENSIVE LIST - ALL AVAILABLE INDICATORS (from advanced-indicators.ts)
+const ALL_AVAILABLE_INDICATORS = `
+### TREND INDICATORS - Moving Averages
+NUMERIC: sma5, sma10, sma20, sma30, sma50, sma100, sma200, ema5, ema10, ema12, ema20, ema26, ema30, ema50, ema100, ema200, sma7, sma25, sma99, wma10, wma20, hma10, hma20, dema10, dema20, tema10, tema20, kama10, kama20, smma10, smma20, zlema10, zlema20, alma10, alma20, vwma10, vwma20
+BOOLEAN: isGoldenCross, isDeathCross, isBullishMA, isBearishMA, isBullishTrend, isBearishTrend, isUptrend, isDowntrend, isUptrendConfirmed3, isDowntrendConfirmed3, isTrendReversalUp, isTrendReversalDown
 
-### Moving Averages
-- ema12, ema26, ema50, ema100, ema200: Exponential Moving Averages
-- sma7, sma25, sma50, sma99, sma200: Simple Moving Averages
+### TREND SYSTEMS  
+NUMERIC: macd, macdSignal, macdHistogram, ppo, ppoSignal, ppoHistogram, trix, adx, plusDI, minusDI, viPlus, viMinus, parabolicSAR, supertrend, aroonUp, aroonDown, aroonOscillator
+BOOLEAN: isMACDBullish, isMACDBearish, isMACDCrossoverBullish, isMACDCrossoverBearish, isEMAFastSlowBullCross, isEMAFastSlowBearCross, isPriceCrossedAboveEMA50, isPriceCrossedBelowEMA50
 
-### Momentum Indicators
-- rsi, rsi9, rsi21: Relative Strength Index (different periods)
-- macd, macdSignal, macdHistogram: MACD indicator
-- stochK, stochD: Stochastic oscillator
-- cci: Commodity Channel Index
+### ICHIMOKU SYSTEM
+NUMERIC: tenkanSen, kijunSen, chikouSpan, senkouSpanA, senkouSpanB, kumoTop, kumoBottom
+BOOLEAN: isPriceAboveCloud, isPriceBelowCloud, isPriceInCloud, isTenkanAboveKijun, isTenkanBelowKijun, isBullishIchimoku, isBearishIchimoku
 
-### Volatility
-- bbUpper, bbMiddle, bbLower: Bollinger Bands
-- bbWidth: Band width (volatility measure)
-- bbPercent: %B - Price position within bands
-- atr, atr14, atr21: Average True Range
+### MOMENTUM OSCILLATORS
+NUMERIC: rsi, rsi9, rsi14, rsi21, stochRSI, stochK, stochD, stochKSlow, stochDSlow, williamsR, cci, roc, momentum, ultimateOscillator, awesomeOscillator, cmo, fisherTransform, coppockCurve, dpo
+BOOLEAN: isOversold, isOverbought, isMomentumBullish, isMomentumBearish, isRSICrossedAbove30, isRSICrossedBelow70
 
-### Trend Indicators
-- adx: Average Directional Index (trend strength)
-- obv: On-Balance Volume
+### VOLATILITY INDICATORS
+NUMERIC: bbUpper, bbMiddle, bbLower, bbWidth, bbPercent, standardDeviation, trueRange, atr, atr14, atr21, natr, kcUpper, kcMiddle, kcLower, donchianUpper, donchianMiddle, donchianLower, chaikinVolatility, massIndex
+BOOLEAN: bbSqueeze, isHighVolatility, isLowVolatility, isVolatilityExpanding, isVolatilityContracting, isNearBBLower, isNearBBUpper, isBelowBBLower, isAboveBBUpper
 
-### Boolean Signals (True/False)
-- isBullishTrend: EMA50 > EMA200 (uptrend)
-- isBearishTrend: EMA50 < EMA200 (downtrend)
-- isUptrend: Price > EMA50
-- isDowntrend: Price < EMA50
-- isUptrendConfirmed3, isDowntrendConfirmed3: 3 consecutive closes vs EMA50
-- isTrendReversalUp, isTrendReversalDown: confirmed trend reversals
-- isOversold: RSI < 30
-- isOverbought: RSI > 70
-- isMACDBullish: MACD > Signal
-- isMACDBearish: MACD < Signal
-- isMACDCrossoverBullish: Recent bullish crossover
-- isMACDCrossoverBearish: Recent bearish crossover
-- isEMAFastSlowBullCross, isEMAFastSlowBearCross: EMA12/26 crosses
-- isPriceCrossedAboveEMA50, isPriceCrossedBelowEMA50: price/EMA50 cross
-- isHighVolume: Volume > 1.5x average
-- isLowVolume: Volume < 0.5x average
-- isPriceAboveVWAP, isPriceBelowVWAP, isNearVWAP: VWAP signals
-- isNearBBLower: Near lower Bollinger Band
-- isNearBBUpper: Near upper Bollinger Band
-- isBelowBBLower: Below lower band
-- isAboveBBUpper: Above upper band
-- isBullishCandle, isBearishCandle: Candle direction
-- isBullishEngulfing, isBearishEngulfing: Engulfing patterns
-- isDoji, isHammer, isShootingStar: Candlestick patterns
+### VOLUME INDICATORS
+NUMERIC: volume, volumeSMA20, volumeRatio, obv, vwap, vwapUpper, vwapLower, adLine, cmf, chaikinOscillator, mfi, eom, forceIndex, nvi, pvi, vpoc, vah, val
+BOOLEAN: isHighVolume, isLowVolume, isVolumeIncreasing, isVolumeDecreasing, isVolumeAboveAverage, isVolumeBelowAverage, isPriceAboveVWAP, isPriceBelowVWAP, isNearVWAP
 
-### Comparison Operators
-- GT: Greater than
-- GTE: Greater than or equal
-- LT: Less than
-- LTE: Less than or equal
-- EQ: Equal
-- NEQ: Not equal
+### MARKET STRUCTURE & LEVELS
+NUMERIC: pivotPoint, r1, r2, r3, s1, s2, s3, fib236, fib382, fib500, fib618, fib786, fib1272, fib1618, fib2618, fractalHigh, fractalLow, alligatorJaw, alligatorTeeth, alligatorLips, gatorOscillator, heikinAshiOpen, heikinAshiHigh, heikinAshiLow, heikinAshiClose
+BOOLEAN: isFractalHigh, isFractalLow
+
+### CANDLE PATTERNS  
+BOOLEAN: isBullishCandle, isBearishCandle, isBullishEngulfing, isBearishEngulfing, isDoji, isHammer, isShootingStar
+
+### MARKET STATE
+BOOLEAN: isBullMarket, isBearMarket, isSidewaysMarket, isTrending, isRanging, overallBullish, overallBearish, overallNeutral
+NUMERIC: trendStrength, momentumStrength, volatilityStrength, volumeStrength
+
+### PRICE DATA
+NUMERIC: price, open, high, low, close, priceChange, priceChangePercent, priceChange24h
+
+Operators: GT, GTE, LT, LTE, EQ, NEQ
 `;
 
-const SYSTEM_PROMPT = `Generate Bitcoin trading strategy as compact JSON. You can use ANY indicators available.
+// TIMEFRAME-SPECIFIC STRATEGY RECOMMENDATIONS
+const TIMEFRAME_STRATEGIES = {
+  '1m': {
+    focus: 'Trading haute fréquence',
+    indicators: 'Utilise RSI, Stochastic, volume rapide, EMA courtes (5,10,20)',
+    tp: '0.3-0.8%',
+    sl: '0.2-0.5%',
+    maxTime: '3-10 min',
+    style: 'Réactivité maximale, beaucoup de trades, petits profits'
+  },
+  '5m': {
+    focus: 'Trading court terme',
+    indicators: 'RSI, MACD rapide, volume, EMA (12,26), Bollinger Bands',
+    tp: '0.8-1.5%',
+    sl: '0.5-1%',
+    maxTime: '10-30 min',
+    style: 'Momentum court terme, réactivité élevée'
+  },
+  '15m': {
+    focus: 'Swing trading court',
+    indicators: 'MACD, RSI, ATR, EMA (20,50), Bollinger Bands, Stochastic',
+    tp: '1.5-3%',
+    sl: '1-2%',
+    maxTime: '30-120 min',
+    style: 'Capture des mouvements intraday, momentum moyen'
+  },
+  '1h': {
+    focus: 'Swing trading moyen',
+    indicators: 'MACD, ADX, EMA (50,100,200), Supertrend, Aroon, Parabolic SAR',
+    tp: '2-4%',
+    sl: '1.5-3%',
+    maxTime: '2-8 heures',
+    style: 'Suivi de tendances horaires, positions intraday/overnight'
+  },
+  '4h': {
+    focus: 'Position trading',
+    indicators: 'ADX, EMA longues (100,200), Pivot Points, Fibonacci, Awesome Oscillator',
+    tp: '3-6%',
+    sl: '2-4%',
+    maxTime: '12-48 heures',
+    style: 'Tendances moyennes, positions de plusieurs jours'
+  },
+  '1d': {
+    focus: 'Trading tendanciel',
+    indicators: 'EMA longues (50,100,200), ADX, Golden/Death Cross, Pivot Weekly, Volume',
+    tp: '5-15%',
+    sl: '3-8%',
+    maxTime: '3-14 jours',
+    style: 'Suivi des grandes tendances, positions long terme'
+  }
+};
 
-Available Indicators:
-- Numeric: rsi, rsi9, rsi21, ema12, ema26, ema50, ema100, ema200, sma7, sma25, sma50, sma99, sma200, macd, macdSignal, macdHistogram, bbUpper, bbMiddle, bbLower, bbWidth, bbPercent, atr, atr14, atr21, stochK, stochD, adx, cci, obv, volumeSMA20, volumeRatio, price, volume, vwap
-- Boolean: isBullishTrend, isBearishTrend, isUptrend, isDowntrend, isUptrendConfirmed3, isDowntrendConfirmed3, isTrendReversalUp, isTrendReversalDown, isOversold, isOverbought, isMACDBullish, isMACDBearish, isMACDCrossoverBullish, isMACDCrossoverBearish, isEMAFastSlowBullCross, isEMAFastSlowBearCross, isPriceCrossedAboveEMA50, isPriceCrossedBelowEMA50, isHighVolume, isLowVolume, isPriceAboveVWAP, isPriceBelowVWAP, isNearVWAP, isNearBBLower, isNearBBUpper, isBelowBBLower, isAboveBBUpper, isBullishCandle, isBearishCandle, isBullishEngulfing, isBearishEngulfing, isDoji, isHammer, isShootingStar
+const SYSTEM_PROMPT = `Tu es un expert en trading algorithmique Bitcoin. Génère une stratégie de trading UNIQUEMENT pour la timeframe spécifiée.
 
-Available Colors (pick ONE unique - EXACT name only): emerald, rose, indigo, violet, amber, lime, sky, fuchsia, pink, red, green, slate, stone
+**IMPORTANT - ADAPTATION À LA TIMEFRAME:**
+La stratégie DOIT être optimisée pour la timeframe demandée. Utilise les indicateurs et paramètres appropriés selon la durée des chandeliers.
 
-Format (copy exactly - ADD fields: "color", "longNotes", "shortNotes", "strategyLogic"):
-{"name":"Strategy Name","description":"Brief desc","color":"emerald","longNotes":"🟢 Conditions d'ACHAT (LONG): ...","shortNotes":"🔴 Conditions de VENTE (SHORT): ...","strategyLogic":"💡 Logique: ...","longEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"LT","value":30},{"type":"comparison","indicator":"price","operator":"GT","value":"ema50"},{"type":"boolean","indicator":"isBullishTrend","value":true}]},"shortEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"GT","value":70},{"type":"comparison","indicator":"price","operator":"LT","value":"ema50"},{"type":"boolean","indicator":"isBearishTrend","value":true}]},"longExitConditions":{"operator":"OR","conditions":[{"type":"comparison","indicator":"price","operator":"LT","value":"ema50"},{"type":"boolean","indicator":"isBearishTrend","value":true}]},"shortExitConditions":{"operator":"OR","conditions":[{"type":"comparison","indicator":"price","operator":"GT","value":"ema50"},{"type":"boolean","indicator":"isBullishTrend","value":true}]},"profitTargetPercent":2.5,"stopLossPercent":1.5,"maxPositionTime":60,"positionSize":0.05,"cooldownPeriod":5}
+TOUS LES INDICATEURS DISPONIBLES:
+${ALL_AVAILABLE_INDICATORS}
 
-Rules: BOTH long+short required, 2-4 conditions per entry, NO spaces, value can be NUMBER (30, 70) OR INDICATOR NAME as STRING ("ema50", "macd", "price") for comparison, value=true/false for boolean, choose diverse indicators, MUST include fields: "color", "longNotes", "shortNotes", "strategyLogic". Use indicator comparisons (e.g. price vs ema50, rsi vs 50) for more dynamic strategies.
+Available Colors (pick ONE unique - EXACT name only): emerald, rose, indigo, violet, amber, lime, sky, fuchsia, pink, red, green, slate, stone, cyan, orange, teal, purple
+
+FORMAT EXACT (JSON compact sans espaces):
+{"name":"Strategy Name","description":"Brief desc","color":"emerald","longNotes":"🟢 Conditions d'ACHAT (LONG): ...","shortNotes":"🔴 Conditions de VENTE (SHORT): ...","strategyLogic":"💡 Logique: ...","longEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"LT","value":30},{"type":"boolean","indicator":"isBullishTrend","value":true}]},"shortEntryConditions":{"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"GT","value":70},{"type":"boolean","indicator":"isBearishTrend","value":true}]},"longExitConditions":{"operator":"OR","conditions":[{"type":"boolean","indicator":"isBearishTrend","value":true}]},"shortExitConditions":{"operator":"OR","conditions":[{"type":"boolean","indicator":"isBullishTrend","value":true}]},"profitTargetPercent":2.5,"stopLossPercent":1.5,"maxPositionTime":60,"positionSize":0.05,"cooldownPeriod":5}
+
+**OPÉRATEURS LOGIQUES COMPLEXES - NOUVELLE CAPACITÉ:**
+Tu peux créer des groupes imbriqués avec des opérateurs mixtes (ET/OU combinés) pour des stratégies sophistiquées:
+
+EXEMPLE DE GROUPE IMBRIQUÉ:
+{"operator":"OR","conditions":[
+  {"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"LT","value":30},{"type":"boolean","indicator":"isBullishTrend","value":true}]},
+  {"operator":"AND","conditions":[{"type":"comparison","indicator":"macd","operator":"GT","value":"macdSignal"},{"type":"boolean","indicator":"isHighVolume","value":true}]}
+]}
+
+Cela signifie: (RSI < 30 ET isBullishTrend) OU (MACD > Signal ET isHighVolume)
+
+EXEMPLES DE STRATÉGIES COMPLEXES:
+
+1. STRATÉGIE MOMENTUM + VOLUME:
+{"operator":"OR","conditions":[
+  {"operator":"AND","conditions":[{"type":"comparison","indicator":"rsi","operator":"LT","value":30},{"type":"boolean","indicator":"isHighVolume","value":true},{"type":"boolean","indicator":"isBullishTrend","value":true}]},
+  {"operator":"AND","conditions":[{"type":"comparison","indicator":"stochK","operator":"LT","value":20},{"type":"boolean","indicator":"isVolumeAboveAverage","value":true}]}
+]}
+
+2. STRATÉGIE BOLLINGER + MACD:
+{"operator":"AND","conditions":[
+  {"operator":"OR","conditions":[{"type":"boolean","indicator":"isBelowBBLower","value":true},{"type":"comparison","indicator":"bbPercent","operator":"LT","value":0.2}]},
+  {"operator":"OR","conditions":[{"type":"boolean","indicator":"isMACDBullish","value":true},{"type":"comparison","indicator":"macd","operator":"GT","value":"macdSignal"}]}
+]}
+
+RÈGLES STRICTES:
+1. LONG et SHORT obligatoires, 2-4 conditions par entrée
+2. value = NUMBER (30, 70) OU STRING d'indicateur ("ema50", "price") pour comparaisons dynamiques
+3. Choisir des indicateurs VARIÉS et ADAPTÉS à la timeframe
+4. Inclure OBLIGATOIREMENT: "color", "longNotes", "shortNotes", "strategyLogic"
+5. JSON compact SANS espaces ni retours à la ligne
+6. **DIVERSITÉ OBLIGATOIRE**: Varie les types d'indicateurs - utilise RSI, MACD, Bollinger, Stochastic, Volume, ADX, ATR, etc. ÉVITE de toujours utiliser Ichimoku
+7. **NOUVEAU**: Tu peux créer des groupes imbriqués avec des opérateurs mixtes pour des stratégies plus sophistiquées
+
+**INDICATEURS RECOMMANDÉS PAR CATÉGORIE:**
+- MOMENTUM: RSI, Stochastic, Williams %R, CCI, ROC
+- TENDANCE: MACD, EMA, SMA, ADX, Parabolic SAR, Supertrend
+- VOLATILITÉ: Bollinger Bands, ATR, Standard Deviation
+- VOLUME: OBV, VWAP, Volume Ratio, MFI, CMF
+- OSCILLATEURS: Awesome Oscillator, Ultimate Oscillator, Fisher Transform
 `;
 
 export async function POST(request: Request) {
   try {
-    const { prompt, type, existingStrategies } = await request.json();
+    const { prompt, type, existingStrategies, timeframe } = await request.json();
+    
+    // Default to 1m if no timeframe provided
+    const currentTimeframe = timeframe || '1m';
+    const tfConfig = TIMEFRAME_STRATEGIES[currentTimeframe as keyof typeof TIMEFRAME_STRATEGIES] || TIMEFRAME_STRATEGIES['1m'];
 
     // Simplified existing strategies context
     let existingNote = '';
     let existingColorsNote = '';
     if (existingStrategies && existingStrategies.length > 0) {
       const focuses = existingStrategies.map((s: any) => s.focus).join(', ');
-      existingNote = `. Avoid: ${focuses}`;
+      existingNote = `. Évite ces approches déjà utilisées: ${focuses}`;
       
       // Extract colors from existing strategies
       const usedColors = existingStrategies
         .filter((s: any) => s.color)
         .map((s: any) => s.color);
       if (usedColors.length > 0) {
-        existingColorsNote = `. Colors already used: ${usedColors.join(', ')}. Pick a DIFFERENT color`;
+        existingColorsNote = `. Couleurs déjà utilisées: ${usedColors.join(', ')}. Choisis une couleur DIFFÉRENTE`;
       }
     }
 
-    // Build user prompt based on type - L'IA peut utiliser TOUS les indicateurs disponibles
+    // Build user prompt based on timeframe AND type - L'IA peut utiliser TOUS les indicateurs disponibles
     let userPrompt = '';
     
+    // Adapt strategy parameters based on timeframe
+    const timeframeContext = `
+TIMEFRAME: ${currentTimeframe}
+FOCUS: ${tfConfig.focus}
+INDICATEURS RECOMMANDÉS: ${tfConfig.indicators}
+PROFIT TARGET: ${tfConfig.tp}
+STOP LOSS: ${tfConfig.sl}
+MAX POSITION TIME: ${tfConfig.maxTime}
+STYLE: ${tfConfig.style}
+`;
+    
     if (type === 'aggressive') {
-      userPrompt = `Aggressive scalping: TP 3%, SL 1.5%, 15min. Use ANY indicators you want (rsi, ema, macd, stochK, cci, adx, bbands, atr, volume, patterns, etc). Create unique strategy${existingNote}${existingColorsNote}`;
+      userPrompt = `${timeframeContext}
+Génère une stratégie de trading optimisée pour ${currentTimeframe}. Utilise les indicateurs appropriés à cette timeframe (Ichimoku, Supertrend, Fisher, Aroon, etc.). Crée une stratégie UNIQUE${existingNote}${existingColorsNote}`;
     } else if (type === 'conservative') {
-      userPrompt = `Conservative trend: TP 2%, SL 2.5%, 120min. Use ANY indicators you want (rsi, ema, macd, stochK, cci, adx, bbands, atr, volume, patterns, etc). Create unique strategy${existingNote}${existingColorsNote}`;
+      userPrompt = `${timeframeContext}
+Génère une stratégie de trading optimisée pour ${currentTimeframe}. Utilise les indicateurs de tendance forte (ADX, Golden Cross, Ichimoku complet, etc.). Crée une stratégie UNIQUE${existingNote}${existingColorsNote}`;
     } else if (type === 'balanced') {
-      userPrompt = `Balanced swing: TP 2.5%, SL 2%, 60min. Use ANY indicators you want (rsi, ema, macd, stochK, cci, adx, bbands, atr, volume, patterns, etc). Create unique strategy${existingNote}${existingColorsNote}`;
+      userPrompt = `${timeframeContext}
+Génère une stratégie de trading optimisée pour ${currentTimeframe}. Mix d'indicateurs de momentum et tendance. Crée une stratégie UNIQUE${existingNote}${existingColorsNote}`;
     } else {
-      userPrompt = `BTC strategy: TP 2.5%, SL 1.5%, 60min. Use ANY indicators you want. Create unique strategy${existingNote}${existingColorsNote}`;
+      userPrompt = `${timeframeContext}
+Génère une stratégie Bitcoin optimisée pour ${currentTimeframe}. Utilise TOUS les indicateurs disponibles. Crée une stratégie UNIQUE${existingNote}${existingColorsNote}`;
     }
 
     console.log('🤖 Generating strategy with OpenAI...');
+    console.log('Timeframe:', currentTimeframe);
     console.log('Prompt type:', type);
     console.log('User input:', prompt);
     console.log('Existing strategies count:', existingStrategies?.length || 0);
@@ -261,7 +352,7 @@ export async function POST(request: Request) {
     // Add strategyType, simulationMode, and timeframe
     strategy.strategyType = 'CUSTOM';
     strategy.simulationMode = true;
-    strategy.timeframe = '1m'; // Default timeframe for AI-generated strategies
+    strategy.timeframe = currentTimeframe; // Use the provided timeframe
     
     // Force presence of user-friendly notes
     strategy.longNotes = strategy.longNotes || '🟢 Conditions d\'ACHAT (LONG): ...';
@@ -285,7 +376,7 @@ export async function POST(request: Request) {
 
     console.log('✅ Strategy validated and ready:', strategy.name);
     
-    console.log('\n📊 COMPLETE STRATEGY GENERATED BY AI:');
+    console.log('\nCOMPLETE STRATEGY GENERATED BY AI:');
     console.log('=====================================');
     console.log(JSON.stringify(strategy, null, 2));
     console.log('=====================================\n');

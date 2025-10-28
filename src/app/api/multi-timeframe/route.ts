@@ -86,8 +86,18 @@ export async function POST(request: NextRequest) {
     const { StrategyManager } = await import('@/lib/strategy-manager');
     const strategyManager = StrategyManager.getGlobalInstance();
     if (strategyManager) {
-      await strategyManager.addNewStrategy(baseConfig, timeframes);
-      console.log(`✅ StrategyManager updated with new strategy "${strategyName}" (instant add)`);
+      // Only add to StrategyManager for NEW timeframes (not the original one)
+      // This prevents overwriting the original strategy's active status
+      const newTimeframes = timeframes.filter(tf => {
+        return !strategyManager.hasStrategy(strategyName, tf);
+      });
+      
+      if (newTimeframes.length > 0) {
+        await strategyManager.addNewStrategy(baseConfig, newTimeframes);
+        console.log(`✅ StrategyManager updated with new strategy "${strategyName}" on ${newTimeframes.join(', ')} (instant add)`);
+      } else {
+        console.log(`ℹ️ Strategy "${strategyName}" already exists in StrategyManager for all timeframes`);
+      }
       
       // IMPORTANT: Force SSE update for all active users
       // This ensures the new strategy appears immediately in the frontend
@@ -149,6 +159,71 @@ export async function GET(request: NextRequest) {
     console.error('Error getting multi-timeframe status:', error);
     return NextResponse.json(
       { error: 'Failed to get strategy status' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PUT(request: NextRequest) {
+  try {
+    const { strategyName, timeframes, config } = await request.json();
+
+    if (!strategyName || !timeframes || !Array.isArray(timeframes) || !config) {
+      return NextResponse.json(
+        { error: 'strategyName, timeframes array, and config are required' },
+        { status: 400 }
+      );
+    }
+
+    // Get authenticated user
+    const session = await getServerSession(authOptions);
+    const userEmail = session?.user?.email;
+    
+    if (!userEmail) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    // Set the userEmail for the updated strategy
+    config.userEmail = userEmail;
+
+    const results = [];
+
+    for (const timeframe of timeframes) {
+      try {
+        // Update the strategy configuration
+        await CustomStrategyRepository.saveCustomStrategy(strategyName, config);
+        
+        results.push({
+          timeframe,
+          success: true,
+          message: `Strategy "${strategyName}" updated on ${timeframe}`
+        });
+      } catch (error) {
+        console.error(`Error updating strategy ${strategyName} on ${timeframe}:`, error);
+        results.push({
+          timeframe,
+          success: false,
+          message: `Error updating strategy "${strategyName}" on ${timeframe}: ${error}`
+        });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    const totalCount = results.length;
+
+    return NextResponse.json({
+      success: successCount > 0,
+      message: `Updated ${successCount}/${totalCount} timeframes`,
+      results
+    });
+
+  } catch (error) {
+    console.error('Error updating strategy:', error);
+    return NextResponse.json(
+      { error: 'Failed to update strategy' },
       { status: 500 }
     );
   }

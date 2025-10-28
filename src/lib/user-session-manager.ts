@@ -20,7 +20,7 @@ export class UserSessionManager {
   private cleanupInterval: NodeJS.Timeout | null = null;
   
   private constructor() {
-    console.log('🚀 UserSessionManager: Created singleton instance');
+    console.log('UserSessionManager: Created singleton instance');
     
     // Start cleanup of inactive sessions every 5 minutes
     this.cleanupInterval = setInterval(() => {

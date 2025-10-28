@@ -8,6 +8,7 @@
  * - Persists even when no users are connected
  */
 
+import { periodicActivationSaver } from './periodic-activation-saver';
 import SharedBinanceWebSocket from './shared-binance-websocket';
 import { StrategyManager } from './strategy-manager';
 
@@ -63,17 +64,21 @@ class TradingDaemon {
       return;
     }
     
-    console.log('🚀 TradingDaemon: Starting 24/7 trading system...');
+    console.log('TradingDaemon: Starting 24/7 trading system...');
     this.startTime = Date.now();
     this.isRunning = true;
     
     // Step 1: Initialize StrategyManager
     await this.initializeStrategyManager();
     
-    // Step 2: Start WebSocket connections for all timeframes
+    // Step 2: Start periodic activation time saver
+    periodicActivationSaver.start();
+    console.log('✅ TradingDaemon: Periodic activation saver started');
+    
+    // Step 3: Start WebSocket connections for all timeframes
     await this.startWebSocketConnections();
     
-    // Step 3: Start strategy analysis loops
+    // Step 4: Start strategy analysis loops
     this.startStrategyAnalysis();
     
     console.log('✅ TradingDaemon: Running! Strategies will execute 24/7');
@@ -91,6 +96,12 @@ class TradingDaemon {
     // Stop all analysis intervals
     this.analysisIntervals.forEach((interval) => clearInterval(interval));
     this.analysisIntervals.clear();
+    
+    // Stop periodic activation saver and perform final save
+    periodicActivationSaver.stop();
+    periodicActivationSaver.finalSave().then(() => {
+      console.log('✅ TradingDaemon: Final activation times saved');
+    });
     
     // WebSockets will remain active (shared with frontend viewers)
     // Just unsubscribe from updates

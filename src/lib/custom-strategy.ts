@@ -434,8 +434,9 @@ export class CustomStrategy {
     indicators: IndicatorValues,
     type: 'LONG' | 'SHORT'
   ): string {
-    const emoji = type === 'LONG' ? '📈' : '📉';
+    const signalType = type === 'LONG' ? 'LONG' : 'SHORT';
     const action = type === 'LONG' ? 'Opening LONG' : 'Opening SHORT';
+    const emoji = type === 'LONG' ? '📈' : '📉';
     
     // Get top-level condition descriptions
     const conditionDescriptions = conditions.conditions
@@ -453,12 +454,12 @@ export class CustomStrategy {
     if (signal.type === 'HOLD') return;
     
     if (this.config.simulationMode) {
-      const signalEmoji = signal.type === 'BUY' ? '📈' : 
-                         signal.type === 'SELL' ? '📉' : 
-                         signal.type === 'CLOSE_LONG' ? '🔴' : 
-                         signal.type === 'CLOSE_SHORT' ? '🟢' : '⚪';
+      const signalType = signal.type === 'BUY' ? 'BUY' : 
+                         signal.type === 'SELL' ? 'SELL' : 
+                         signal.type === 'CLOSE_LONG' ? 'CLOSE_LONG' : 
+                         signal.type === 'CLOSE_SHORT' ? 'CLOSE_SHORT' : 'HOLD';
       
-      console.log(`${signalEmoji} [${this.config.name}] ${signal.type} at $${signal.price.toFixed(2)}`);
+      console.log(`${signalType} [${this.config.name}] ${signal.type} at $${signal.price.toFixed(2)}`);
       console.log(`   ${signal.reason}`);
       console.log(`   Stats: P&L: ${this.totalPnL.toFixed(2)} USDT | Trades: ${this.totalTrades} | Win Rate: ${this.getWinRate().toFixed(1)}%`);
     }
@@ -561,6 +562,27 @@ export class CustomStrategy {
    */
   getConfig(): CustomStrategyConfig {
     return { ...this.config };
+  }
+
+  /**
+   * Get profit target percentage
+   */
+  getProfitTargetPercent(): number {
+    return this.config.profitTargetPercent || 0;
+  }
+
+  /**
+   * Get stop loss percentage
+   */
+  getStopLossPercent(): number {
+    return this.config.stopLossPercent || 0;
+  }
+
+  /**
+   * Get max position time in milliseconds
+   */
+  getMaxPositionTime(): number {
+    return this.config.maxPositionTime || 0;
   }
   
   /**

@@ -1,7 +1,8 @@
 'use client';
 
-import { StrategyPerformance } from '@/types/trading';
+import { BacktestResult, StrategyPerformance } from '@/types/trading';
 import { useEffect, useRef, useState } from 'react';
+import { BiDownArrow, BiSquare, BiUpArrow } from 'react-icons/bi';
 import { FaBrain, FaChartLine } from 'react-icons/fa';
 import {
   HiAdjustments,
@@ -10,7 +11,6 @@ import {
   HiArrowDown,
   HiArrowUp,
   HiBeaker,
-  HiBookOpen,
   HiChartBar,
   HiChartPie,
   HiChartSquareBar,
@@ -19,7 +19,6 @@ import {
   HiChevronLeft,
   HiChevronRight,
   HiClock,
-  HiCog,
   HiCollection,
   HiCurrencyDollar,
   HiLightningBolt,
@@ -29,6 +28,7 @@ import {
   HiScale,
   HiSearch,
   HiSortAscending,
+  HiStar,
   HiSwitchVertical,
   HiTrash,
   HiTrendingDown,
@@ -50,6 +50,7 @@ import {
   TbTrendingDown,
   TbTrendingUp
 } from 'react-icons/tb';
+import LocalBacktestModal from './LocalBacktestModal';
 
 interface IndicatorPanelData {
   // Price-based
@@ -172,6 +173,7 @@ interface StrategyPanelProps {
   currentTimeframe?: string; // Current timeframe for Reset All
   isStatsSticky?: boolean; // Indicates if main stats bar is sticky
   onToggleStrategy?: (strategyName: string) => void;
+  togglingStrategies?: Set<string>; // Strategies currently being toggled
   selectedStrategy?: string;
   onSelectStrategy?: (strategyName: string) => void;
   onRefresh?: () => void;
@@ -184,8 +186,14 @@ interface StrategyPanelProps {
   onCreateStrategy?: () => void;
   indicatorData?: IndicatorPanelData | null;
   advancedIndicators?: any;
+  basicIndicators?: any;
+  triggerIndicatorsOverlay?: boolean;
+  onIndicatorsOverlayTriggered?: () => void;
+  triggerAdvancedIndicatorsOverlay?: boolean;
+  onAdvancedIndicatorsOverlayTriggered?: () => void;
   onDeleteStrategy?: (strategyName: string) => void;
   onShowTimeframeComparison?: (strategyName: string) => void;
+  onEditStrategy?: (strategyName: string, config: any) => void;
 }
 
 export default function StrategyPanel({ 
@@ -194,6 +202,7 @@ export default function StrategyPanel({
   currentTimeframe,
   isStatsSticky,
   onToggleStrategy, 
+  togglingStrategies,
   selectedStrategy, 
   onSelectStrategy,
   onRefresh,
@@ -206,8 +215,12 @@ export default function StrategyPanel({
   onCreateStrategy,
   indicatorData,
   advancedIndicators,
+  basicIndicators,
+  triggerIndicatorsOverlay,
+  onIndicatorsOverlayTriggered,
   onDeleteStrategy,
-  onShowTimeframeComparison
+  onShowTimeframeComparison,
+  onEditStrategy
 }: StrategyPanelProps) {
   const [viewMode, setViewMode] = useState<'compact' | 'normal'>('normal');
   const [resetConfirm, setResetConfirm] = useState<string | null>(null); // Strategy name to reset
@@ -217,6 +230,14 @@ export default function StrategyPanel({
   const [expandedSections, setExpandedSections] = useState<Record<string, Set<string>>>({}); // Sections étendues par stratégie
   const [sortMode, setSortMode] = useState<'smart' | 'pnl' | 'winrate' | 'capital' | 'alphabetical'>('smart'); // Mode de tri
   const [showAdvancedIndicators, setShowAdvancedIndicators] = useState(false); // Afficher tous les indicateurs avancés
+  
+  // Trigger indicators overlay from Dashboard
+  useEffect(() => {
+    if (triggerIndicatorsOverlay) {
+      setShowInfoOverlay(true);
+      onIndicatorsOverlayTriggered?.();
+    }
+  }, [triggerIndicatorsOverlay, onIndicatorsOverlayTriggered]);
   const [activeAdvancedTab, setActiveAdvancedTab] = useState<'trend' | 'momentum' | 'volatility' | 'volume'>('trend'); // Onglet actif pour les indicateurs avancés
   const [settingsOpen, setSettingsOpen] = useState<string | null>(null); // Strategy name in settings mode
   const [showInfoOverlay, setShowInfoOverlay] = useState(false);
@@ -239,6 +260,12 @@ export default function StrategyPanel({
   const [selectedStrategyForMultiTF, setSelectedStrategyForMultiTF] = useState<string | null>(null);
   const [selectedTimeframes, setSelectedTimeframes] = useState<Set<string>>(new Set(['1m']));
   const [isActivatingMultiTF, setIsActivatingMultiTF] = useState(false);
+  
+  // Local Backtest modal state
+  const [showLocalBacktestModal, setShowLocalBacktestModal] = useState(false);
+  const [selectedStrategyForLocalBacktest, setSelectedStrategyForLocalBacktest] = useState<string | null>(null);
+  const [selectedTimeframeForLocalBacktest, setSelectedTimeframeForLocalBacktest] = useState<string>('1m');
+  const [localBacktestResults, setLocalBacktestResults] = useState<BacktestResult | null>(null);
   
   // Action buttons expanded state
   const [expandedActionButtons, setExpandedActionButtons] = useState<Set<string>>(new Set());
@@ -276,7 +303,7 @@ export default function StrategyPanel({
       return newSet;
     });
   };
-  
+
   const INDICATOR_CATEGORIES: IndicatorCategory[] = [
     {
       id: 'price',
@@ -657,14 +684,14 @@ export default function StrategyPanel({
         return `${indicator}${operator}${valueDisplay}`;
       } else if (cond.type === 'boolean') {
         const booleanMap: Record<string, string> = {
-          'isDowntrend': 'Trend↓✓', 'isUptrend': 'Trend↑✓', 'isBearishTrend': 'Bear✓',
-          'isBullishTrend': 'Bull✓', 'isDowntrendConfirmed3': 'Conf↓ (3)', 'isUptrendConfirmed3': 'Conf↑ (3)',
-          'isTrendReversalDown': 'Rev↓', 'isTrendReversalUp': 'Rev↑', 'isOversold': 'OS✓',
-          'isOverbought': 'OB✓', 'isMACDBearish': 'MACD↓', 'isMACDBullish': 'MACD↑',
+          'isDowntrend': 'Trend↓', 'isUptrend': 'Trend↑', 'isBearishTrend': 'Bear',
+          'isBullishTrend': 'Bull', 'isDowntrendConfirmed3': 'Conf↓ (3)', 'isUptrendConfirmed3': 'Conf↑ (3)',
+          'isTrendReversalDown': 'Rev↓', 'isTrendReversalUp': 'Rev↑', 'isOversold': 'OS',
+          'isOverbought': 'OB', 'isMACDBearish': 'MACD↓', 'isMACDBullish': 'MACD↑',
           'isMACDCrossoverBearish': 'MACDx↓', 'isMACDCrossoverBullish': 'MACDx↑',
           'isPriceCrossedBelowEMA50': 'Px↓E50', 'isPriceCrossedAboveEMA50': 'Px↑E50',
           'isHighVolume': 'Vol↑', 'isLowVolume': 'Vol↓', 'isPriceBelowVWAP': 'P<VWAP',
-          'isPriceAboveVWAP': 'P>VWAP', 'isBelowBBLower': 'BB↓✓', 'isAboveBBUpper': 'BB↑✓',
+          'isPriceAboveVWAP': 'P>VWAP', 'isBelowBBLower': 'BB↓', 'isAboveBBUpper': 'BB↑',
           'isBearishEngulfing': 'Engulf↓', 'isBullishEngulfing': 'Engulf↑'
         };
         return booleanMap[cond.indicator] || cond.indicator;
@@ -745,7 +772,7 @@ export default function StrategyPanel({
         return `${cond.indicator}: ${leftFormatted} ${operatorSymbol} ${rightFormatted}`;
       } else if (cond.type === 'boolean') {
         const value = indicatorData[cond.indicator];
-        return `${cond.indicator}: ${value ? '✓' : '✗'}`;
+        return `${cond.indicator}: ${value ? 'Met' : 'Not met'}`;
       }
       return 'Unknown condition';
     };
@@ -997,14 +1024,14 @@ export default function StrategyPanel({
         title: 'RSI + EMA (Mean Reversion)',
         description: 'Cette stratégie combine l\'indicateur RSI pour détecter les conditions de survente/surachat et les EMA pour confirmer la tendance.',
         longCriteria: [
-          '📊 RSI < 30 : Le marché est survendu, opportunité d\'achat',
-          '📈 EMA50 > EMA200 : Tendance haussière confirmée (Golden Cross)',
-          '⏱️ Cooldown : 5 minutes entre chaque signal'
+          'RSI < 30 : Le marché est survendu, opportunité d\'achat',
+          'EMA50 > EMA200 : Tendance haussière confirmée (Golden Cross)',
+          'Cooldown : 5 minutes entre chaque signal'
         ],
         shortCriteria: [
-          '📊 RSI > 70 : Le marché est suracheté, opportunité de vente',
-          '📉 EMA50 < EMA200 : Tendance baissière confirmée (Death Cross)',
-          '⏱️ Cooldown : 5 minutes entre chaque signal'
+          'RSI > 70 : Le marché est suracheté, opportunité de vente',
+          'EMA50 < EMA200 : Tendance baissière confirmée (Death Cross)',
+          'Cooldown : 5 minutes entre chaque signal'
         ],
         logic: 'La stratégie achète quand le marché est survendu dans une tendance haussière et vend quand il est suracheté dans une tendance baissière. Elle vise à profiter des retours de prix vers la moyenne (mean reversion).'
       },
@@ -1012,14 +1039,14 @@ export default function StrategyPanel({
         title: 'Momentum Crossover',
         description: 'Cette stratégie détecte les changements de momentum grâce aux croisements des moyennes mobiles exponentielles.',
         longCriteria: [
-          '⚡ EMA12 > EMA26 : Croisement haussier des moyennes courtes',
-          '📈 Prix > EMA200 : Confirmation de la tendance haussière',
-          '⏱️ Cooldown : 3 minutes entre chaque signal'
+          'EMA12 > EMA26 : Croisement haussier des moyennes courtes',
+          'Prix > EMA200 : Confirmation de la tendance haussière',
+          'Cooldown : 3 minutes entre chaque signal'
         ],
         shortCriteria: [
-          '⚡ EMA12 < EMA26 : Croisement baissier des moyennes courtes',
-          '📉 Prix < EMA200 : Confirmation de la tendance baissière',
-          '⏱️ Cooldown : 3 minutes entre chaque signal'
+          'EMA12 < EMA26 : Croisement baissier des moyennes courtes',
+          'Prix < EMA200 : Confirmation de la tendance baissière',
+          'Cooldown : 3 minutes entre chaque signal'
         ],
         logic: 'La stratégie suit les croisements des EMA courtes (12/26) pour détecter les changements de momentum. Le filtre EMA200 confirme la direction de la tendance principale et évite les faux signaux.'
       },
@@ -1027,16 +1054,16 @@ export default function StrategyPanel({
         title: 'Volume + MACD',
         description: 'Cette stratégie combine l\'analyse du volume, du momentum (MACD) et du VWAP pour des signaux haute conviction.',
         longCriteria: [
-          '📊 Volume > 2x moyen : Forte activité de trading détectée',
-          '📈 MACD positif : Momentum haussier confirmé',
-          '💰 Prix > VWAP : Position favorable au-dessus du prix moyen',
-          '⏱️ Cooldown : 3 minutes entre chaque signal'
+          'Volume > 2x moyen : Forte activité de trading détectée',
+          'MACD positif : Momentum haussier confirmé',
+          'Prix > VWAP : Position favorable au-dessus du prix moyen',
+          'Cooldown : 3 minutes entre chaque signal'
         ],
         shortCriteria: [
-          '📊 Volume > 2x moyen : Forte activité de trading détectée',
-          '📉 MACD négatif : Momentum baissier confirmé',
-          '💰 Prix < VWAP : Position favorable en-dessous du prix moyen',
-          '⏱️ Cooldown : 3 minutes entre chaque signal'
+          'Volume > 2x moyen : Forte activité de trading détectée',
+          'MACD négatif : Momentum baissier confirmé',
+          'Prix < VWAP : Position favorable en-dessous du prix moyen',
+          'Cooldown : 3 minutes entre chaque signal'
         ],
         logic: 'La stratégie attend une forte conviction avec trois confirmations : volume élevé (activité du marché), momentum confirmé (MACD) et prix favorable par rapport au VWAP. Cette triple confirmation maximise les chances de succès.'
       },
@@ -1044,16 +1071,16 @@ export default function StrategyPanel({
         title: 'Bollinger Bounce (Mean Reversion)',
         description: 'Cette stratégie profite des rebonds sur les bandes de Bollinger avec confirmation RSI.',
         longCriteria: [
-          '📉 Prix proche bande inférieure : Signal de rebond potentiel',
-          '📊 RSI < 45 : Conditions de survente légère',
-          '📈 Volatilité modérée : Conditions idéales pour le mean reversion',
-          '⏱️ Cooldown : 2 minutes entre chaque signal'
+          'Prix proche bande inférieure : Signal de rebond potentiel',
+          'RSI < 45 : Conditions de survente légère',
+          'Volatilité modérée : Conditions idéales pour le mean reversion',
+          'Cooldown : 2 minutes entre chaque signal'
         ],
         shortCriteria: [
-          '📈 Prix proche bande supérieure : Signal de retrait potentiel',
-          '📊 RSI > 55 : Conditions de surachat léger',
-          '📉 Volatilité modérée : Conditions idéales pour le mean reversion',
-          '⏱️ Cooldown : 2 minutes entre chaque signal'
+          'Prix proche bande supérieure : Signal de retrait potentiel',
+          'RSI > 55 : Conditions de surachat léger',
+          'Volatilité modérée : Conditions idéales pour le mean reversion',
+          'Cooldown : 2 minutes entre chaque signal'
         ],
         logic: 'La stratégie achète quand le prix touche la bande inférieure de Bollinger (avec RSI bas) et vend quand il atteint la bande supérieure (avec RSI haut) ou la moyenne mobile. Principe de retour à la moyenne (mean reversion).'
       },
@@ -1061,16 +1088,16 @@ export default function StrategyPanel({
         title: 'Trend Follower',
         description: 'Stratégie simple qui suit la tendance en utilisant l\'EMA 50 comme filtre. Inverse automatiquement la position lors d\'un changement de tendance.',
         longCriteria: [
-          '📈 Prix > EMA50 : Tendance haussière détectée',
-          '✅ Ouverture position LONG automatique',
-          '🎯 TP: +2% | SL: -2%',
-          '🔄 Fermeture auto si tendance s\'inverse'
+          'Prix > EMA50 : Tendance haussière détectée',
+          'Ouverture position LONG automatique',
+          'TP: +2% | SL: -2%',
+          'Fermeture auto si tendance s\'inverse'
         ],
         shortCriteria: [
-          '📉 Prix < EMA50 : Tendance baissière détectée',
-          '✅ Ouverture position SHORT automatique',
-          '🎯 TP: +2% | SL: -2%',
-          '🔄 Fermeture auto si tendance s\'inverse'
+          'Prix < EMA50 : Tendance baissière détectée',
+          'Ouverture position SHORT automatique',
+          'TP: +2% | SL: -2%',
+          'Fermeture auto si tendance s\'inverse'
         ],
         logic: 'La stratégie suit la tendance de manière simple : LONG quand le prix est au-dessus de l\'EMA50, SHORT quand il est en-dessous. Dès que la tendance s\'inverse, la position est fermée et une nouvelle position opposée est ouverte automatiquement. Pas de cooldown, inversion instantanée.'
       },
@@ -1078,16 +1105,16 @@ export default function StrategyPanel({
         title: 'ATR Trend Pullback',
         description: 'Stratégie prudente: entrées sur pullback vers EMA50 dans la direction de la tendance, validées par ATR et une bougie de retournement.',
         longCriteria: [
-          '🚀 EMA50 > EMA200 : Tendance haussière',
-          '↔️ Prix proche EMA50 (±0.5×ATR)',
-          '📊 RSI 35-55 : neutralité/retour à la moyenne',
-          '🕯️ Bougie de retournement haussière'
+          'EMA50 > EMA200 : Tendance haussière',
+          'Prix proche EMA50 (±0.5×ATR)',
+          'RSI 35-55 : neutralité/retour à la moyenne',
+          'Bougie de retournement haussière'
         ],
         shortCriteria: [
-          '📉 EMA50 < EMA200 : Tendance baissière',
-          '↔️ Prix proche EMA50 (±0.5×ATR)',
-          '📊 RSI 45-65 : neutralité/retour à la moyenne',
-          '🕯️ Bougie de retournement baissière'
+          'EMA50 < EMA200 : Tendance baissière',
+          'Prix proche EMA50 (±0.5×ATR)',
+          'RSI 45-65 : neutralité/retour à la moyenne',
+          'Bougie de retournement baissière'
         ],
         logic: 'On suit la tendance principale (EMA50 vs EMA200) et on attend un pullback contrôlé (ATR) vers EMA50. L\'entrée se fait sur un signal de retournement (bougie) avec RSI modéré pour éviter le surachat/survente extrêmes. Objectif: quelques setups propres par jour.'
       }
@@ -1111,7 +1138,7 @@ export default function StrategyPanel({
         console.log(`✅ Strategy "${strategyName}" [${timeframe}] reset successfully`);
         setResetConfirm(null);
         // Data will update automatically via SSE
-        console.log('📡 Data will refresh via SSE stream');
+        console.log('Data will refresh via SSE stream');
       } else {
         console.error('Failed to reset strategy');
       }
@@ -1137,10 +1164,10 @@ export default function StrategyPanel({
       });
 
       if (deleteResponse.ok) {
-        console.log(`🗑️ Strategy "${strategyName}" [${timeframe}] deleted completely`);
+        console.log(`Strategy "${strategyName}" [${timeframe}] deleted completely`);
         setDeleteConfirm(null);
         // Data will update automatically via SSE after StrategyManager reload
-        console.log('📡 Data will refresh via SSE stream');
+        console.log('Data will refresh via SSE stream');
       } else {
         const data = await deleteResponse.json();
         throw new Error(data.error || 'Failed to delete strategy');
@@ -1161,9 +1188,23 @@ export default function StrategyPanel({
       .filter(p => p.strategyName === strategyName)
       .map(p => p.timeframe);
     
-    // Pre-select all existing timeframes
-    setSelectedTimeframes(new Set(existingTimeframes));
+    // Pre-select all existing timeframes EXCEPT the current timeframe
+    // These will be non-deselectable (already exist)
+    const timeframesToSelect = existingTimeframes.filter(tf => tf !== currentTimeframe);
+    setSelectedTimeframes(new Set(timeframesToSelect));
     setShowMultiTimeframeModal(true);
+  };
+
+  // Local Backtest Functions
+  const openLocalBacktestModal = (strategyName: string, timeframe: string = '1m') => {
+    setSelectedStrategyForLocalBacktest(strategyName);
+    setSelectedTimeframeForLocalBacktest(timeframe);
+    setShowLocalBacktestModal(true);
+  };
+
+  const handleLocalBacktestComplete = (result: BacktestResult) => {
+    setLocalBacktestResults(result);
+    console.log('Local backtest completed:', result);
   };
 
   const toggleTimeframeSelection = (timeframe: string) => {
@@ -1199,7 +1240,7 @@ export default function StrategyPanel({
         setSelectedStrategyForMultiTF(null);
         setSelectedTimeframes(new Set(['1m']));
         // New strategies will appear automatically via SSE
-        console.log('📡 New strategies will appear via SSE stream');
+        console.log('New strategies will appear via SSE stream');
       } else {
         const error = await response.json();
         console.error('Failed to activate multi-timeframe:', error);
@@ -1284,12 +1325,12 @@ export default function StrategyPanel({
       ? perf.customConfig.color 
       : undefined;
     
-    // Reduce color intensity when in GLOBAL view
-    const isGlobalView = selectedStrategy === 'GLOBAL';
+    // Only active strategies have bright colors for name and toggle
+    const isActive = perf.isActive;
     
     // For CUSTOM strategies with predefined color map
     if (strategyType === 'CUSTOM' && customColor) {
-      const colorMap: Record<string, any> = isGlobalView ? {
+      const colorMap: Record<string, any> = !isActive ? {
         emerald: { border: 'border-emerald-400/30', borderDimmed: 'border-emerald-400/30', text: 'text-emerald-400/60', accent: 'bg-emerald-400/30' },
         rose: { border: 'border-rose-400/30', borderDimmed: 'border-rose-400/30', text: 'text-rose-400/60', accent: 'bg-rose-400/30' },
         indigo: { border: 'border-indigo-400/30', borderDimmed: 'border-indigo-400/30', text: 'text-indigo-400/60', accent: 'bg-indigo-400/30' },
@@ -1324,7 +1365,7 @@ export default function StrategyPanel({
     
     switch (strategyType) {
       case 'RSI_EMA':
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-blue-400/30',
           borderDimmed: 'border-blue-400/30',
           text: 'text-blue-400/60',
@@ -1336,7 +1377,7 @@ export default function StrategyPanel({
           accent: 'bg-blue-400'
         };
       case 'MOMENTUM_CROSSOVER':
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-purple-400/30',
           borderDimmed: 'border-purple-400/30',
           text: 'text-purple-400/60',
@@ -1348,7 +1389,7 @@ export default function StrategyPanel({
           accent: 'bg-purple-400'
         };
       case 'VOLUME_MACD':
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-orange-400/30',
           borderDimmed: 'border-orange-400/30',
           text: 'text-orange-400/60',
@@ -1360,7 +1401,7 @@ export default function StrategyPanel({
           accent: 'bg-orange-400'
         };
       case 'BOLLINGER_BOUNCE':
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-teal-400/30',
           borderDimmed: 'border-teal-400/30',
           text: 'text-teal-400/60',
@@ -1372,7 +1413,7 @@ export default function StrategyPanel({
           accent: 'bg-teal-400'
         };
       case 'TREND_FOLLOWER':
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-cyan-400/30',
           borderDimmed: 'border-cyan-400/30',
           text: 'text-cyan-400/60',
@@ -1384,7 +1425,7 @@ export default function StrategyPanel({
           accent: 'bg-cyan-400'
         };
       case 'ATR_PULLBACK':
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-yellow-400/30',
           borderDimmed: 'border-yellow-400/30',
           text: 'text-yellow-400/60',
@@ -1396,7 +1437,7 @@ export default function StrategyPanel({
           accent: 'bg-yellow-400'
         };
       case 'CUSTOM':
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-fuchsia-400/30',
           borderDimmed: 'border-fuchsia-400/30',
           text: 'text-fuchsia-400/60',
@@ -1408,7 +1449,7 @@ export default function StrategyPanel({
           accent: 'bg-fuchsia-400'
         };
       default:
-        return isGlobalView ? {
+        return !isActive ? {
           border: 'border-gray-400/30',
           borderDimmed: 'border-gray-400/30',
           text: 'text-gray-400/60',
@@ -1515,7 +1556,7 @@ export default function StrategyPanel({
             }}
             title="Cliquer pour voir le meilleur trade"
           >
-              <span className="text-yellow-400 text-base">🏆</span>
+              <span className="text-yellow-400 text-base"><HiStar className="w-4 h-4" /></span>
               <span className="text-xs font-bold text-yellow-400">{bestStrategy.strategyName}</span>
               <span className="px-2 py-0.5 bg-yellow-500/20 rounded text-xs font-bold text-yellow-300">
                 +{bestStrategy.totalPnL.toFixed(2)} USDT
@@ -1601,6 +1642,7 @@ export default function StrategyPanel({
             title={`Tri actuel: ${getSortLabel()} - Cliquer pour changer`}
           >
             {getSortIcon()}
+            <span className="text-xs">{getSortLabel()}</span>
           </button>
 
           {/* Toggle All Strategies Button */}
@@ -1612,20 +1654,25 @@ export default function StrategyPanel({
             return (
               <button
                 onClick={() => {
-                  // Toggle all strategies
-                  performances.forEach(perf => {
+                  // Toggle all strategies - optimized to avoid unnecessary API calls
+                  const strategiesToToggle = performances.filter(perf => {
                     if (allActive) {
-                      // If all active, stop all
-                      if (perf.isActive && onToggleStrategy) {
-                        onToggleStrategy(perf.strategyName);
-                      }
+                      // If all active, stop all ACTIVE strategies
+                      return perf.isActive;
                     } else {
-                      // If not all active, start all
-                      if (!perf.isActive && onToggleStrategy) {
-                        onToggleStrategy(perf.strategyName);
-                      }
+                      // If not all active, start all INACTIVE strategies
+                      return !perf.isActive;
                     }
                   });
+                  
+                  // Only make API calls for strategies that actually need to be toggled
+                  strategiesToToggle.forEach(perf => {
+                    if (onToggleStrategy) {
+                      onToggleStrategy(perf.strategyName);
+                    }
+                  });
+                  
+                  console.log(`${allActive ? 'Stopping' : 'Starting'} ${strategiesToToggle.length} strategies (${allActive ? 'active' : 'inactive'} ones)`);
                 }}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
                   allActive
@@ -1674,9 +1721,7 @@ export default function StrategyPanel({
             }`}
             title="Mode normal - Vue équilibrée"
           >
-            <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-              <rect x="4" y="4" width="12" height="12" rx="1" />
-            </svg>
+            <HiChartSquareBar className="w-4 h-4" />
           </button>
           </div>
           {/* Reset All Button */}
@@ -1694,9 +1739,9 @@ export default function StrategyPanel({
                   body: JSON.stringify({ timeframe: currentTimeframe || '1m' })
                 });
                 onRefresh?.();
-                console.log('📡 Trades reset, data will refresh via SSE stream');
+                console.log('Trades reset, data will refresh via SSE stream');
               } catch (e) {
-                console.error('❌ Reset all failed', e);
+                console.error('Reset all failed', e);
               }
             }}
             className={`p-2 rounded-lg border transition-all ${
@@ -1752,9 +1797,27 @@ export default function StrategyPanel({
             </div>
             <div className="flex items-center gap-3">
               {!overlayCollapsed && (
-                <span className="text-gray-400 text-xs">Hide</span>
+                <button 
+                  onClick={() => setOverlayCollapsed(true)}
+                  className="text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                  title="Collapse"
+                >
+                  <HiChevronLeft className="w-3 h-3" />
+                  <span className="text-xs">Hide</span>
+                </button>
               )}
-              <button onClick={() => setShowInfoOverlay(false)} className="text-gray-400 hover:text-white transition-colors">✕</button>
+              {overlayCollapsed && (
+                <button 
+                  onClick={() => setOverlayCollapsed(false)}
+                  className="text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                  title="Expand"
+                >
+                  <HiChevronRight className="w-3 h-3" />
+                </button>
+              )}
+              <button onClick={() => setShowInfoOverlay(false)} className="text-gray-400 hover:text-white transition-colors">
+                <HiX className="w-3 h-3" />
+              </button>
             </div>
           </div>
           
@@ -1855,22 +1918,24 @@ export default function StrategyPanel({
               <div className="flex gap-1 p-2 border-b border-gray-700/50">
                 <button
                   onClick={() => setShowAdvancedIndicators(false)}
-                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                  className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-2 ${
                     !showAdvancedIndicators 
                       ? 'bg-blue-600 text-white' 
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
+                  <HiChartBar className="w-3 h-3" />
                   Essential
                 </button>
                 <button
                   onClick={() => setShowAdvancedIndicators(true)}
-                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                  className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-2 ${
                     showAdvancedIndicators 
                       ? 'bg-blue-600 text-white' 
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
+                  <HiBeaker className="w-3 h-3" />
                   Advanced
                 </button>
               </div>
@@ -2003,42 +2068,46 @@ export default function StrategyPanel({
                         <div className="flex gap-1 mb-2">
                           <button
                             onClick={() => setActiveAdvancedTab('trend')}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                            className={`px-2 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
                               activeAdvancedTab === 'trend' 
                                 ? 'bg-blue-600 text-white' 
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                             }`}
                           >
+                            <HiTrendingUp className="w-3 h-3" />
                             Trend
                           </button>
                           <button
                             onClick={() => setActiveAdvancedTab('momentum')}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                            className={`px-2 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
                               activeAdvancedTab === 'momentum' 
                                 ? 'bg-blue-600 text-white' 
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                             }`}
                           >
+                            <HiLightningBolt className="w-3 h-3" />
                             Momentum
                           </button>
                           <button
                             onClick={() => setActiveAdvancedTab('volatility')}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                            className={`px-2 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
                               activeAdvancedTab === 'volatility' 
                                 ? 'bg-blue-600 text-white' 
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                             }`}
                           >
+                            <HiScale className="w-3 h-3" />
                             Volatility
                           </button>
                           <button
                             onClick={() => setActiveAdvancedTab('volume')}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                            className={`px-2 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
                               activeAdvancedTab === 'volume' 
                                 ? 'bg-blue-600 text-white' 
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                             }`}
                           >
+                            <HiChartBar className="w-3 h-3" />
                             Volume
                           </button>
                         </div>
@@ -2151,42 +2220,42 @@ export default function StrategyPanel({
                             };
                             
                             if (typeof value === 'number' && !isNaN(value)) {
-                              const formattedValue = value.toFixed(2);
-                              const color = value > 0 ? 'text-green-400' : value < 0 ? 'text-red-400' : 'text-gray-400';
-                              
-                              return (
+                            const formattedValue = value.toFixed(2);
+                            const color = value > 0 ? 'text-green-400' : value < 0 ? 'text-red-400' : 'text-gray-400';
+                            
+                            return (
                                 <div key={key} className="flex items-center justify-between gap-3 py-0.5 cursor-pointer hover:bg-gray-700/30 px-1 rounded transition-colors group">
-                                  <div className="flex items-center gap-2 flex-1 text-gray-400">
+                                <div className="flex items-center gap-2 flex-1 text-gray-400">
                                     <span className="text-xs">{key}</span>
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <div className="absolute z-10 bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-gray-300 max-w-xs shadow-lg">
+                                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="absolute z-10 bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-gray-300 max-w-xs shadow-lg">
                                         {getAdvancedDescription(key)}
-                                      </div>
                                     </div>
                                   </div>
-                                  <div className="font-mono text-white">{formattedValue}</div>
                                 </div>
-                              );
+                                <div className="font-mono text-white">{formattedValue}</div>
+                              </div>
+                            );
                             } else if (typeof value === 'boolean') {
-                              const color = value ? 'text-green-400' : 'text-red-400';
-                              const dot = value ? 'bg-green-500' : 'bg-red-500';
-                              
-                              return (
+                            const color = value ? 'text-green-400' : 'text-red-400';
+                            const dot = value ? 'bg-green-500' : 'bg-red-500';
+                            
+                            return (
                                 <div key={key} className="flex items-center justify-between gap-3 py-0.5 cursor-pointer hover:bg-gray-700/30 px-1 rounded transition-colors group">
-                                  <div className="flex items-center gap-2 flex-1">
-                                    <span className={`w-1.5 h-1.5 rounded-full ${dot} flex-shrink-0`}></span>
+                                <div className="flex items-center gap-2 flex-1">
+                                  <span className={`w-1.5 h-1.5 rounded-full ${dot} flex-shrink-0`}></span>
                                     <span className={`${color} text-xs`}>{key}</span>
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <div className="absolute z-10 bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-gray-300 max-w-xs shadow-lg">
+                                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="absolute z-10 bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-gray-300 max-w-xs shadow-lg">
                                         {getAdvancedDescription(key)}
-                                      </div>
                                     </div>
                                   </div>
-                                  <div className={`font-mono text-[10px] ${color}`}>
-                                    {value ? 'true' : 'false'}
-                                  </div>
                                 </div>
-                              );
+                                <div className={`font-mono text-[10px] ${color}`}>
+                                  {value ? 'true' : 'false'}
+                                </div>
+                              </div>
+                            );
                             }
                             return null;
                           })}
@@ -2218,51 +2287,14 @@ export default function StrategyPanel({
       ) : (
       <div className={`px-4 pb-4 grid gap-4 ${
         viewMode === 'compact' 
-          ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3' 
+          ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 3xl:grid-cols-6' 
           : flippedCards.size > 0
-          ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
-          : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+          ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-3 3xl:grid-cols-4'
+          : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-3 3xl:grid-cols-4'
       }`}>
         {sortedPerformances.map((perf) => {
           const colors = getStrategyColor(perf);
-          // Get full colors for name and toggle (even in GLOBAL view)
-          const getFullColors = (perf: StrategyPerformance) => {
-            const strategyType = perf.strategyType;
-            const customColor = perf.strategyType === 'CUSTOM' && perf.customConfig?.color 
-              ? perf.customConfig.color 
-              : undefined;
-            
-            if (strategyType === 'CUSTOM' && customColor) {
-              const colorMap: Record<string, any> = {
-                emerald: { text: 'text-emerald-400', accent: 'bg-emerald-400' },
-                rose: { text: 'text-rose-400', accent: 'bg-rose-400' },
-                indigo: { text: 'text-indigo-400', accent: 'bg-indigo-400' },
-                violet: { text: 'text-violet-400', accent: 'bg-violet-400' },
-                amber: { text: 'text-amber-400', accent: 'bg-amber-400' },
-                lime: { text: 'text-lime-400', accent: 'bg-lime-400' },
-                sky: { text: 'text-sky-400', accent: 'bg-sky-400' },
-                fuchsia: { text: 'text-fuchsia-400', accent: 'bg-fuchsia-400' },
-                pink: { text: 'text-pink-400', accent: 'bg-pink-400' },
-                red: { text: 'text-red-400', accent: 'bg-red-400' },
-                green: { text: 'text-green-400', accent: 'bg-green-400' },
-                slate: { text: 'text-slate-400', accent: 'bg-slate-400' },
-                stone: { text: 'text-stone-400', accent: 'bg-stone-400' }
-              };
-              return colorMap[customColor] || { text: 'text-fuchsia-400', accent: 'bg-fuchsia-400' };
-            }
-            
-            switch (strategyType) {
-              case 'RSI_EMA': return { text: 'text-blue-400', accent: 'bg-blue-400' };
-              case 'MOMENTUM_CROSSOVER': return { text: 'text-purple-400', accent: 'bg-purple-400' };
-              case 'VOLUME_MACD': return { text: 'text-orange-400', accent: 'bg-orange-400' };
-              case 'BOLLINGER_BOUNCE': return { text: 'text-teal-400', accent: 'bg-teal-400' };
-              case 'TREND_FOLLOWER': return { text: 'text-cyan-400', accent: 'bg-cyan-400' };
-              case 'ATR_PULLBACK': return { text: 'text-yellow-400', accent: 'bg-yellow-400' };
-              case 'CUSTOM': return { text: 'text-fuchsia-400', accent: 'bg-fuchsia-400' };
-              default: return { text: 'text-gray-400', accent: 'bg-gray-400' };
-            }
-          };
-          const fullColors = getFullColors(perf);
+          // Use colors from getStrategyColor which now handles focus correctly
           
           // Get criteria for this strategy
           const strategyCriteria = getCriteriaForStrategy?.(perf.strategyType, perf);
@@ -2285,9 +2317,9 @@ export default function StrategyPanel({
               className={`bg-gray-900 rounded-lg p-3 border-2 transition-all cursor-pointer h-fit ${
                 !perf.isActive 
                   ? 'border-gray-700 opacity-60'
-                  : selectedStrategy === 'GLOBAL' || selectedStrategy === perf.strategyName
+                  : selectedStrategy === perf.strategyName
                   ? colors.border
-                    : colors.borderDimmed
+                    : 'border-gray-700'
               }`}
               title={selectedStrategy === perf.strategyName ? 'Cliquer pour retourner à la vue globale' : 'Cliquer pour voir les détails de cette stratégie'}
             >
@@ -2295,9 +2327,9 @@ export default function StrategyPanel({
                 // COMPACT MODE
                 <>
                   {/* Header: Name + Status Points + Toggle */}
-                  <div className="flex items-center justify-between mb-3 gap-2">
+                  <div className="flex items-center justify-between mb-2 gap-2">
                     <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                      <h3 className={`text-sm font-semibold ${(selectedStrategy === perf.strategyName || perf.isActive) ? fullColors.text : colors.text} truncate`}>{perf.strategyName}</h3>
+                      <h3 className={`text-sm font-semibold ${colors.text} truncate`}>{perf.strategyName}</h3>
                       {/* Status Indicator */}
                       <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                         perf.isActive 
@@ -2305,7 +2337,7 @@ export default function StrategyPanel({
                           : 'bg-red-500'
                       }`}></div>
                       {bestStrategy && perf.strategyName === bestStrategy.strategyName && perf.totalPnL > 0 && (
-                        <span className="text-yellow-400 text-xs flex-shrink-0">👑 Best</span>
+                        <span className="text-yellow-400 text-xs flex-shrink-0"><HiStar className="w-3 h-3" /></span>
                       )}
                     </div>
                     
@@ -2360,15 +2392,16 @@ export default function StrategyPanel({
                         e.stopPropagation();
                         onToggleStrategy?.(perf.strategyName);
                       }}
+                      disabled={togglingStrategies?.has(perf.strategyName)}
                       className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
                         perf.isActive ? 'bg-gray-700' : 'bg-gray-600'
-                      }`}
-                      title={perf.isActive ? 'Désactiver la stratégie' : 'Activer la stratégie'}
+                      } ${togglingStrategies?.has(perf.strategyName) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={togglingStrategies?.has(perf.strategyName) ? 'Changement en cours...' : (perf.isActive ? 'Désactiver la stratégie' : 'Activer la stratégie')}
                     >
                       <span className={`inline-block h-3 w-3 transform rounded-full transition-transform ${
                         perf.isActive ? 'translate-x-5' : 'translate-x-1'
                       } ${
-                        perf.isActive ? fullColors.accent : 'bg-gray-400'
+                        perf.isActive ? colors.accent : 'bg-gray-400'
                       }`} />
                     </button>
                     </div>
@@ -2376,7 +2409,7 @@ export default function StrategyPanel({
 
                   {/* Cooldown Display */}
                   {strategyCriteria && strategyCriteria.cooldownRemaining > 0 && (
-                    <div className="flex items-center gap-1 mb-2">
+                    <div className="flex items-center gap-1 mb-1">
                       <HiClock className="w-3 h-3 text-orange-400" />
                       <span className="text-xs text-orange-400">
                         {formatCooldown(strategyCriteria.cooldownRemaining)}
@@ -2386,21 +2419,17 @@ export default function StrategyPanel({
 
                   {/* Action Buttons - Compact Mode (shown when expanded) */}
                   {expandedActionButtons.has(perf.strategyName) && (
-                    <div className="flex items-center gap-1 mb-2 pb-2 border-b border-gray-700/30">
+                    <div className="flex items-center gap-1 mb-1 pb-1 border-b border-gray-700/30">
                       {/* Settings */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (settingsOpen === perf.strategyName) {
-                            closeSettings();
-                          } else {
-                            openSettings(perf.strategyName, perf.strategyType, perf.config);
-                          }
+                          openSettings(perf.strategyName, perf.strategyType, perf.customConfig);
                         }}
-                        className={`p-1 ${colors.text} hover:opacity-70 transition-opacity text-xs`}
-                        title="Paramètres"
+                        className={`p-1 ${colors.text} hover:opacity-70 transition-opacity`}
+                        title="Settings"
                       >
-                        <HiCog className="w-3.5 h-3.5" />
+                        <HiAdjustments className="w-3.5 h-3.5" />
                       </button>
 
                       {/* Timeframe Comparison */}
@@ -2428,6 +2457,20 @@ export default function StrategyPanel({
                           title="Multi-TF"
                         >
                           <HiViewGrid className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+
+                      {/* Local Backtest */}
+                      {perf.strategyType === 'CUSTOM' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openLocalBacktestModal(perf.strategyName, perf.timeframe);
+                          }}
+                          className={`p-1 ${colors.text} hover:opacity-70 transition-opacity`}
+                          title="Local Backtest"
+                        >
+                          <HiBeaker className="w-3.5 h-3.5" />
                         </button>
                       )}
 
@@ -2460,7 +2503,7 @@ export default function StrategyPanel({
                   )}
 
                   {/* Capital */}
-                  <div className="mb-2 flex items-center gap-2">
+                  <div className="mb-1 flex items-center gap-2">
                     {/* Timeframe Badge */}
                     <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-gray-700/50 text-gray-300 border border-gray-600 flex-shrink-0">
                       {perf.timeframe}
@@ -2473,7 +2516,7 @@ export default function StrategyPanel({
                   </div>
 
                   {/* Total P&L */}
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-1">
                     <span className="text-xs text-gray-400">Total P&L:</span>
                     <span className={`text-sm font-bold ${
                       perf.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
@@ -2487,10 +2530,10 @@ export default function StrategyPanel({
                     <>
                       {/* Exit Conditions */}
                       {perf.customConfig && (
-                        <div className="flex items-center justify-between pt-2 mt-2 border-t border-gray-700/50 mb-2 w-full">
+                        <div className="flex items-center justify-between pt-1 mt-1 border-t border-gray-700/50 mb-1 w-full">
                           <div className="flex items-center gap-1.5">
-                            <HiXCircle className="w-3 h-3 text-orange-400 flex-shrink-0" />
-                            <span className="text-[10px] text-orange-400 font-semibold">Exit:</span>
+                            <BiSquare className="w-4 h-4 text-orange-400 flex-shrink-0" />
+                            <span className="text-xs text-orange-400 font-semibold">EXIT:</span>
                           </div>
                           <div className="flex items-center gap-1.5 max-w-[60%]">
                             {perf.currentPosition.type === 'LONG' 
@@ -2502,8 +2545,10 @@ export default function StrategyPanel({
                       )}
                       
                       {/* Unrealized P&L */}
-                    <div className="flex items-center justify-between pt-2 border-t border-gray-700/50">
+                    <div className="flex items-center justify-between pt-1 border-t border-gray-700/50">
                       <div className="flex items-center gap-1.5">
+                      {perf.currentPosition.type === 'LONG' ? <BiUpArrow className="w-4 h-4 text-green-400 flex-shrink-0" /> : <BiDownArrow className="w-4 h-4 text-red-400 flex-shrink-0" />}
+
                           <span className={`text-xs font-semibold ${
                             perf.currentPosition.type === 'LONG' ? 'text-green-400' : 'text-red-400'
                           }`}>
@@ -2541,7 +2586,7 @@ export default function StrategyPanel({
                       title={settingsOpen === perf.strategyName ? "Cliquer pour fermer les paramètres" : ""}
                     >
                     <div className="flex items-center gap-2 min-w-0">
-                      <h3 className={`text-base font-semibold ${(selectedStrategy === perf.strategyName || perf.isActive) ? fullColors.text : colors.text} truncate`}>{perf.strategyName}</h3>
+                      <h3 className={`text-base font-semibold ${colors.text} truncate`}>{perf.strategyName}</h3>
                         {/* Status Indicator */}
                         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                           perf.isActive 
@@ -2549,10 +2594,10 @@ export default function StrategyPanel({
                             : 'bg-red-500'
                         }`}></div>
                       {bestStrategy && perf.strategyName === bestStrategy.strategyName && perf.totalPnL > 0 && (
-                        <span className="text-yellow-400 text-sm flex-shrink-0">👑</span>
+                        <span className="text-yellow-400 text-sm flex-shrink-0"><HiStar className="w-3 h-3" /></span>
                       )}
                     </div>
-                      <div className={`h-0.5 w-24 ${selectedStrategy === perf.strategyName ? fullColors.accent : colors.accent} mt-1.5 mb-1.5 rounded-full`}></div>
+                      <div className={`h-0.5 w-24 ${colors.accent} mt-1.5 mb-1.5 rounded-full`}></div>
                       <div className="flex items-center gap-3">
                       {/* Timeframe Badge */}
                       <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-gray-700/50 text-gray-300 border border-gray-600 flex-shrink-0">
@@ -2580,16 +2625,23 @@ export default function StrategyPanel({
                       {/* Action Buttons - Hidden by default, shown when expanded */}
                       {expandedActionButtons.has(perf.strategyName) && (
                         <>
-                      {/* Read Button */}
+                      {/* Edit Strategy Button */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleCardFlip(perf.strategyName);
+                          // Ouvrir l'éditeur de stratégie pour cette stratégie
+                          if (perf.strategyType === 'CUSTOM' && perf.customConfig) {
+                            // Pour les stratégies custom, ouvrir l'éditeur avec la config existante
+                            onEditStrategy?.(perf.strategyName, perf.customConfig);
+                          } else {
+                            // Pour les stratégies prédéfinies, afficher un message ou permettre la conversion
+                            alert('Cette stratégie prédéfinie ne peut pas être éditée. Créez une stratégie personnalisée basée sur cette stratégie.');
+                          }
                         }}
                         className={`p-1.5 ${colors.text} hover:opacity-70 transition-opacity`}
-                        title={flippedCards.has(perf.strategyName) ? "Retour à la vue normale" : "Voir les détails de la stratégie"}
+                        title="Éditer la stratégie (conditions d'achat/vente)"
                       >
-                        <HiBookOpen className="w-3.5 h-3.5" />
+                        <HiTrendingUp className="w-3.5 h-3.5" />
                       </button>
 
                           {/* Timeframe Comparison Button */}
@@ -2620,23 +2672,20 @@ export default function StrategyPanel({
                             </button>
                           )}
 
-                      {/* Settings Button */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (settingsOpen === perf.strategyName) {
-                            closeSettings();
-                          } else {
-                            openSettings(perf.strategyName, perf.strategyType, perf.config);
-                          }
-                        }}
-                        className={`p-1.5 ${colors.text} hover:opacity-70 transition-opacity ${
-                          settingsOpen === perf.strategyName ? 'opacity-100' : ''
-                        }`}
-                        title="Paramètres de la stratégie"
-                      >
-                        <HiCog className="w-3.5 h-3.5" />
-                      </button>
+                          {/* Local Backtest Button - Only for CUSTOM strategies */}
+                          {perf.strategyType === 'CUSTOM' && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openLocalBacktestModal(perf.strategyName, perf.timeframe);
+                              }}
+                              className={`p-1.5 ${colors.text} hover:opacity-70 transition-opacity`}
+                              title="Local Backtest Strategy"
+                            >
+                              <HiBeaker className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
 
                       {/* Delete Button - Only for CUSTOM strategies */}
                       {perf.strategyType === 'CUSTOM' && (
@@ -2647,9 +2696,10 @@ export default function StrategyPanel({
                                 e.stopPropagation();
                                 handleDeleteStrategy(perf.strategyName, perf.strategyType, perf.timeframe);
                               }}
-                              className="px-2 py-1 text-green-400 hover:opacity-70 text-xs font-medium transition-opacity"
+                              className="px-2 py-1 text-green-400 hover:opacity-70 text-xs font-medium transition-opacity flex items-center gap-1"
                               title="Confirmer la suppression"
                             >
+                              <HiCheckCircle className="w-3 h-3" />
                               ✓
                             </button>
                             <button
@@ -2657,9 +2707,10 @@ export default function StrategyPanel({
                                 e.stopPropagation();
                                 setDeleteConfirm(null);
                               }}
-                              className="px-2 py-1 text-red-400 hover:opacity-70 text-xs font-medium transition-opacity"
+                              className="px-2 py-1 text-red-400 hover:opacity-70 text-xs font-medium transition-opacity flex items-center gap-1"
                               title="Annuler"
                             >
+                              <HiXCircle className="w-3 h-3" />
                               ✗
                             </button>
                           </div>
@@ -2685,9 +2736,10 @@ export default function StrategyPanel({
                               e.stopPropagation();
                               handleResetStrategy(perf.strategyName, perf.timeframe);
                             }}
-                            className="px-2 py-1 text-green-400 hover:opacity-70 text-xs font-medium transition-opacity"
+                            className="px-2 py-1 text-green-400 hover:opacity-70 text-xs font-medium transition-opacity flex items-center gap-1"
                             title="Confirmer"
                           >
+                            <HiCheckCircle className="w-3 h-3" />
                             ✓
                           </button>
                           <button
@@ -2695,9 +2747,10 @@ export default function StrategyPanel({
                               e.stopPropagation();
                               setResetConfirm(null);
                             }}
-                            className="px-2 py-1 text-red-400 hover:opacity-70 text-xs font-medium transition-opacity"
+                            className="px-2 py-1 text-red-400 hover:opacity-70 text-xs font-medium transition-opacity flex items-center gap-1"
                             title="Annuler"
                           >
+                            <HiXCircle className="w-3 h-3" />
                             ✗
                           </button>
                         </div>
@@ -2736,15 +2789,16 @@ export default function StrategyPanel({
                           e.stopPropagation();
                           onToggleStrategy?.(perf.strategyName);
                         }}
+                        disabled={togglingStrategies?.has(perf.strategyName)}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                           perf.isActive ? 'bg-gray-700' : 'bg-gray-600'
-                        }`}
-                        title={perf.isActive ? 'Désactiver' : 'Activer'}
+                        } ${togglingStrategies?.has(perf.strategyName) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title={togglingStrategies?.has(perf.strategyName) ? 'Changement en cours...' : (perf.isActive ? 'Désactiver' : 'Activer')}
                       >
                       <span className={`inline-block h-4 w-4 transform rounded-full transition-transform ${
                         perf.isActive ? 'translate-x-6' : 'translate-x-1'
                         } ${
-                          perf.isActive ? fullColors.accent : 'bg-gray-400'
+                          perf.isActive ? colors.accent : 'bg-gray-400'
                         }`} />
                       </button>
                     </div>
@@ -2932,7 +2986,7 @@ export default function StrategyPanel({
                           className="p-3 cursor-pointer hover:bg-green-900/20 transition-colors flex items-center justify-between"
                           onClick={() => toggleSection(perf.strategyName, 'long')}
                         >
-                          <h4 className="text-sm font-bold text-green-400">🟢 Conditions d'ACHAT (LONG)</h4>
+                          <h4 className="text-sm font-bold text-green-400">Conditions d'ACHAT (LONG)</h4>
                           {isSectionExpanded(perf.strategyName, 'long') ? (
                             <HiChevronDown className="w-4 h-4 text-green-400" />
                           ) : (
@@ -2967,7 +3021,7 @@ export default function StrategyPanel({
                           className="p-3 cursor-pointer hover:bg-red-900/20 transition-colors flex items-center justify-between"
                           onClick={() => toggleSection(perf.strategyName, 'short')}
                         >
-                          <h4 className="text-sm font-bold text-red-400">🔴 Conditions de VENTE (SHORT)</h4>
+                          <h4 className="text-sm font-bold text-red-400">Conditions de VENTE (SHORT)</h4>
                           {isSectionExpanded(perf.strategyName, 'short') ? (
                             <HiChevronDown className="w-4 h-4 text-red-400" />
                           ) : (
@@ -3137,10 +3191,10 @@ export default function StrategyPanel({
                     <>
                       {/* Exit Conditions - Above Unrealized */}
                       {perf.customConfig && (
-                        <div className="flex items-center justify-between pt-2 mt-2 border-t border-gray-700/50 mb-2 w-full">
+                        <div className="flex items-center justify-between pt-2 mt-2 border-t border-gray-700/50 w-full">
                       <div className="flex items-center gap-1.5">
-                            <HiXCircle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
-                            <span className="text-[10px] text-orange-400 font-semibold">Exit:</span>
+                            <BiSquare className="w-4 h-4 text-orange-400 flex-shrink-0" />
+                            <span className="text-xs text-orange-400 font-semibold">EXIT:</span>
                           </div>
                           <div className="flex items-center gap-1.5">
                             {perf.currentPosition.type === 'LONG' 
@@ -3152,13 +3206,16 @@ export default function StrategyPanel({
                       )}
                       
                       {/* Unrealized P&L */}
-                      <div className="flex items-center justify-between pt-2 w-full mt-2">
+                      
+                      <div className="flex items-center justify-between pt-2 w-full">
                       <div className="flex items-center gap-1.5">
-                          <span className={`text-xs font-semibold ${
-                            perf.currentPosition.type === 'LONG' ? 'text-green-400' : 'text-red-400'
-                          }`}>
-                            {perf.currentPosition.type}:
-                          </span>
+                        {perf.currentPosition.type === 'LONG' ? <BiUpArrow className="w-4 h-4 text-green-400 flex-shrink-0" /> : <BiDownArrow className="w-4 h-4 text-red-400 flex-shrink-0" />}
+                        <span className={`text-xs font-semibold ${
+                          perf.currentPosition.type === 'LONG' ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          {perf.currentPosition.type}:
+                        </span>
+                        
                         <div className={`w-1.5 h-1.5 rounded-full ${
                           perf.currentPosition.type === 'LONG' ? 'bg-green-500' : 'bg-red-500'
                         }`}></div>
@@ -3168,7 +3225,9 @@ export default function StrategyPanel({
                       }`}>
                         {perf.currentPosition.unrealizedPnL >= 0 ? '+' : ''}
                         {perf.currentPosition.unrealizedPnL.toFixed(2)} USDT
-                        ({perf.currentPosition.unrealizedPnLPercent.toFixed(2)}%)
+                        <span className="text-[10px] ml-1">
+                          ({perf.currentPosition.unrealizedPnLPercent >= 0 ? '+' : ''}{perf.currentPosition.unrealizedPnLPercent.toFixed(2)}%)
+                        </span>
                       </span>
                     </div>
                     </>
@@ -3231,23 +3290,63 @@ export default function StrategyPanel({
 
             <div className="mb-4">
               <p className="text-sm text-gray-400 mb-2">Stratégie : <span className="text-white font-semibold">{selectedStrategyForMultiTF}</span></p>
-              <p className="text-xs text-gray-500">Sélectionnez les timeframes sur lesquels activer cette stratégie</p>
+              <p className="text-xs text-gray-500 mb-3">Sélectionnez les timeframes sur lesquels activer cette stratégie</p>
+              
+              {/* Legend */}
+              <div className="flex items-center gap-4 text-xs">
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 bg-gray-600 rounded"></div>
+                  <span className="text-gray-400">Actuelle</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 bg-green-600/30 border border-green-500 rounded"></div>
+                  <span className="text-gray-400">Déjà disponible</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 bg-blue-500 rounded"></div>
+                  <span className="text-gray-400">Sélectionné</span>
+                </div>
+              </div>
               </div>
               
             <div className="grid grid-cols-3 gap-2 mb-6">
-              {['1m', '5m', '15m', '1h', '4h', '1d'].map((tf) => (
-                <button
-                  key={tf}
-                  onClick={() => toggleTimeframeSelection(tf)}
-                  className={`py-3 px-4 rounded-lg font-medium transition-all ${
-                    selectedTimeframes.has(tf)
-                      ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
-                      : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                  }`}
-                >
-                  {tf}
-                </button>
-              ))}
+              {['1m', '5m', '15m', '1h', '4h', '1d'].map((tf) => {
+                // Check if strategy already exists on this timeframe
+                const performancesToCheck = allPerformances || performances;
+                const alreadyExists = performancesToCheck.some(p => p.strategyName === selectedStrategyForMultiTF && p.timeframe === tf);
+                const isCurrentTimeframe = tf === currentTimeframe;
+                const isNonDeselectable = alreadyExists && !isCurrentTimeframe;
+                
+                return (
+                  <button
+                    key={tf}
+                    onClick={() => !isCurrentTimeframe && !isNonDeselectable && toggleTimeframeSelection(tf)}
+                    disabled={isCurrentTimeframe || isNonDeselectable}
+                    className={`py-3 px-4 rounded-lg font-medium transition-all ${
+                      isCurrentTimeframe
+                        ? 'bg-gray-600 text-gray-500 cursor-not-allowed'
+                        : isNonDeselectable
+                        ? 'bg-green-600/30 text-green-400 border border-green-500 cursor-not-allowed'
+                        : selectedTimeframes.has(tf)
+                        ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                    }`}
+                    title={
+                      isCurrentTimeframe 
+                        ? 'Timeframe actuelle (déjà active)'
+                        : isNonDeselectable
+                        ? 'Déjà disponible sur cette timeframe (non désélectionnable)'
+                        : 'Nouvelle timeframe'
+                    }
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      {tf}
+                      {isCurrentTimeframe && <span className="text-xs">✓</span>}
+                      {isNonDeselectable && <span className="text-xs">✓</span>}
+                    </div>
+                  </button>
+                );
+              })}
               </div>
               
             <div className="flex items-center justify-between gap-3">
@@ -3271,6 +3370,21 @@ export default function StrategyPanel({
                 </div>
           </div>
         </div>
+      )}
+
+      {/* Local Backtest Modal */}
+      {showLocalBacktestModal && selectedStrategyForLocalBacktest && (
+        <LocalBacktestModal
+          isOpen={showLocalBacktestModal}
+          onClose={() => {
+            setShowLocalBacktestModal(false);
+            setSelectedStrategyForLocalBacktest(null);
+            setLocalBacktestResults(null);
+          }}
+          strategyName={selectedStrategyForLocalBacktest}
+          timeframe={selectedTimeframeForLocalBacktest}
+          onBacktestComplete={handleLocalBacktestComplete}
+        />
       )}
     </div>
   );

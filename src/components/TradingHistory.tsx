@@ -1,5 +1,6 @@
 import { StrategyPerformance } from '@/types/trading';
 import React, { useMemo, useState } from 'react';
+import { BiDownArrow, BiUpArrow } from 'react-icons/bi';
 import { HiChartBar, HiClock, HiCurrencyDollar, HiLightningBolt, HiTrendingUp } from 'react-icons/hi';
 
 interface TradingHistoryProps {
@@ -376,17 +377,10 @@ const TradingHistory: React.FC<TradingHistoryProps> = ({ strategyPerformances, s
                           
                           {/* Entry */}
                           <div className="flex items-center gap-1.5">
-                            <span className="text-green-400 font-semibold">📥</span>
-                            <span className="text-gray-300 truncate max-w-xs">{trade.entryReason}</span>
-                          </div>
-                          
-                          <span className="text-gray-600">|</span>
-                          
-                          {/* Exit */}
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-red-400 font-semibold">📤</span>
-                            <span className="text-gray-300 truncate max-w-xs">{trade.exitReason}</span>
-                          </div>
+                            Exit Reason: 
+                            {trade.type === 'LONG' ? <BiUpArrow className="w-4 h-4 text-green-400" /> : <BiDownArrow className="w-4 h-4 text-red-400" />}
+                            {trade.type === 'LONG' ? <span className="text-gray-300 truncate">{trade.entryReason}</span> : <span className="text-gray-300 truncate">{trade.exitReason}</span>}
+                          </div>                
                         </div>
                         
                         {/* Timestamp with Strategy Name */}

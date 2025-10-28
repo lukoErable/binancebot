@@ -28,7 +28,7 @@ export class SharedMultiTimeframeWebSocketManager {
     this.onStateUpdate = onStateUpdate;
     this.userSession = UserSessionManager.getInstance();
     
-    console.log(`🚀 [USER ${this.userId}] Initializing shared multi-timeframe manager...`);
+    console.log(`[USER ${this.userId}] Initializing shared multi-timeframe manager...`);
   }
   
   /**
@@ -95,7 +95,7 @@ export class SharedMultiTimeframeWebSocketManager {
       }
     });
     
-    console.log(`📊 [USER ${this.userId}] Active strategies on: ${Array.from(timeframesWithActiveStrategies).join(', ')}`);
+    console.log(`[USER ${this.userId}] Active strategies on: ${Array.from(timeframesWithActiveStrategies).join(', ')}`);
     
     // Always subscribe to primary timeframe (for UI)
     timeframesWithActiveStrategies.add(primaryTimeframe);
@@ -191,7 +191,7 @@ export class SharedMultiTimeframeWebSocketManager {
       // Debug log first time
       if (strategyPerformances.length > 0 && !this.hasLoggedStrategies) {
         const userType = this.userId && this.userId.includes('@') && this.userId !== 'anonymous' ? 'authenticated' : 'anonymous';
-        console.log(`📊 [USER ${this.userId}] (${userType}) Sending ${strategyPerformances.length} strategies to frontend (filtered from ${allPerformances.length} total)`);
+        console.log(`[USER ${this.userId}] (${userType}) Sending ${strategyPerformances.length} strategies to frontend (filtered from ${allPerformances.length} total)`);
         this.hasLoggedStrategies = true;
       }
     } else {
@@ -212,7 +212,7 @@ export class SharedMultiTimeframeWebSocketManager {
         
         if (strategyPerformances.length > 0 && !this.hasLoggedStrategies) {
           const userType = this.userId && this.userId.includes('@') && this.userId !== 'anonymous' ? 'authenticated' : 'anonymous';
-          console.log(`📊 [USER ${this.userId}] (${userType}) Sending ${strategyPerformances.length} strategies to frontend (filtered from ${allPerformances.length} total)`);
+          console.log(`[USER ${this.userId}] (${userType}) Sending ${strategyPerformances.length} strategies to frontend (filtered from ${allPerformances.length} total)`);
           this.hasLoggedStrategies = true;
         }
       } else {

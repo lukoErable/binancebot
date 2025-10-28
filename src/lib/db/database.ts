@@ -48,7 +48,7 @@ class Database {
    */
   private async warmUpPool(): Promise<void> {
     try {
-      console.log('🔥 Warming up database connection pool...');
+      console.log('Warming up database connection pool...');
       // Execute a simple query to establish initial connections
       await this.pool.query('SELECT 1');
       console.log('✅ Database pool warmed up and ready');

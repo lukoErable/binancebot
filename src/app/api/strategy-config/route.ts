@@ -62,7 +62,7 @@ export async function PUT(request: NextRequest) {
     const strategyManager = StrategyManager.getGlobalInstance();
     if (strategyManager) {
       strategyManager.updateStrategyConfig(strategyName, config, tf);
-      console.log(`🔥 Hot reload: Config applied to running strategy "${strategyName}" [${tf}] for ${userEmail}`);
+      console.log(`Hot reload: Config applied to running strategy "${strategyName}" [${tf}] for ${userEmail}`);
     }
 
     return NextResponse.json({

@@ -4,9 +4,23 @@ import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { StrategyPerformance, StrategyState } from '@/types/trading';
 import { signIn, useSession } from 'next-auth/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { HiChevronDown, HiClock } from 'react-icons/hi';
+import {
+  HiArrowRight,
+  HiArrowUp,
+  HiChartBar,
+  HiCheck,
+  HiCheckCircle,
+  HiChevronDown,
+  HiClock,
+  HiCog,
+  HiExclamationCircle,
+  HiLightningBolt,
+  HiStop,
+  HiTrendingDown,
+  HiTrendingUp,
+  HiXCircle
+} from 'react-icons/hi';
 import BinanceChart from './BinanceChart';
-import IndicatorCategoryTabs from './IndicatorCategoryTabs';
 import {
   ChartSkeleton,
   CriteriaSkeleton,
@@ -45,42 +59,27 @@ export default function Dashboard() {
   const [localConfigCache, setLocalConfigCache] = useState<Record<string, { profitTargetPercent?: number | null; stopLossPercent?: number | null; maxPositionTime?: number | null }>>({});
   const [selectedStrategy, setSelectedStrategy] = useState<string>('GLOBAL'); // 'GLOBAL' or strategy name
   const [showStrategyBuilder, setShowStrategyBuilder] = useState(false);
+  const [editingStrategy, setEditingStrategy] = useState<{ name: string; config: any } | null>(null);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [isStatsSticky, setIsStatsSticky] = useState(false);
   const statsSentinelRef = useRef<HTMLDivElement>(null);
   const [showTimeframeComparison, setShowTimeframeComparison] = useState(false);
-  const [showAdvancedIndicators, setShowAdvancedIndicators] = useState(false);
-  const [advancedIndicators, setAdvancedIndicators] = useState<any>(null);
-  const [isLoadingIndicators, setIsLoadingIndicators] = useState(false);
   const [comparisonStrategyName, setComparisonStrategyName] = useState<string | null>(null);
   const [allTimeframePerformances, setAllTimeframePerformances] = useState<StrategyPerformance[]>([]);
+  const [togglingStrategies, setTogglingStrategies] = useState<Set<string>>(new Set()); // Track strategies being toggled
   const [showAllPositions, setShowAllPositions] = useState(false);
+  const [triggerIndicatorsOverlay, setTriggerIndicatorsOverlay] = useState(false);
+  const [triggerAdvancedIndicatorsOverlay, setTriggerAdvancedIndicatorsOverlay] = useState(false);
   
-  // Load advanced indicators when modal opens
   // Get current state from cache
   const state = timeframeStates[selectedTimeframe] || null;
-
-  useEffect(() => {
-    if (showAdvancedIndicators && !advancedIndicators && !isLoadingIndicators) {
-      setIsLoadingIndicators(true);
-      
-      // Use real state data for advanced indicators
-      setTimeout(() => {
-        if (state) {
-          // Use the actual state data which now includes all advanced indicators
-          setAdvancedIndicators(state);
-        }
-        setIsLoadingIndicators(false);
-      }, 500);
-    }
-  }, [showAdvancedIndicators, advancedIndicators, isLoadingIndicators, state]);
 
   // Load saved timeframe from localStorage on first mount (client-side only, after hydration)
   useEffect(() => {
     if (isFirstLoad && typeof window !== 'undefined') {
       const saved = localStorage.getItem('selectedTimeframe');
       if (saved && saved !== selectedTimeframe) {
-        console.log(`📂 Loading saved timeframe from localStorage: ${saved}`);
+        console.log(`Loading saved timeframe from localStorage: ${saved}`);
         setSelectedTimeframe(saved);
       }
       setIsFirstLoad(false);
@@ -91,13 +90,13 @@ export default function Dashboard() {
   useEffect(() => {
     if (!isFirstLoad && typeof window !== 'undefined') {
       localStorage.setItem('selectedTimeframe', selectedTimeframe);
-      console.log(`💾 Saved timeframe to localStorage: ${selectedTimeframe}`);
+      console.log(`Saved timeframe to localStorage: ${selectedTimeframe}`);
     }
   }, [selectedTimeframe, isFirstLoad]);
 
   // Auto-start SSE when auth status is ready (includes reconnection on login/logout)
   useEffect(() => {
-    console.log(`🔍 [SSE Effect] status=${status}, isFirstLoad=${isFirstLoad}, session=${session ? 'exists' : 'null'}`);
+    console.log(`[SSE Effect] status=${status}, isFirstLoad=${isFirstLoad}, session=${session ? 'exists' : 'null'}`);
     
     // Skip while NextAuth is loading OR during first load (wait for localStorage to load)
     if (status === 'loading' || isFirstLoad) {
@@ -106,18 +105,18 @@ export default function Dashboard() {
       return;
     }
     
-    console.log(`🔄 Auth status: ${status}, starting SSE with timeframe: ${selectedTimeframe}...`);
+    console.log(`Auth status: ${status}, starting SSE with timeframe: ${selectedTimeframe}...`);
     
     // Close existing connection if any
     if (window.tradingEventSource) {
-      console.log('🔌 Closing existing SSE connection...');
+      console.log('Closing existing SSE connection...');
       window.tradingEventSource.close();
       window.tradingEventSource = undefined;
     }
     
     // Start SSE with a small delay to ensure clean reconnection
     const startTimer = setTimeout(() => {
-      console.log(`🚀 Starting SSE stream on ${selectedTimeframe}...`);
+      console.log(`Starting SSE stream on ${selectedTimeframe}...`);
       startDataStream(selectedTimeframe, false);
     }, 300);
     
@@ -168,9 +167,28 @@ export default function Dashboard() {
         try {
           const data: StrategyState = JSON.parse(event.data);
           
+          // Debug log for all SSE messages
+          console.log(`[SSE] Received message:`, {
+            hasStrategyPerformances: !!data.strategyPerformances,
+            count: data.strategyPerformances?.length || 0,
+            timeframe: data.timeframe
+          });
+          
+          // Debug log for strategy updates
+          if (data.strategyPerformances && data.strategyPerformances.length > 0) {
+            const activeStrategies = data.strategyPerformances.filter(p => p.isActive);
+            const inactiveStrategies = data.strategyPerformances.filter(p => !p.isActive);
+            console.log(`[SSE] Received update: ${activeStrategies.length} active, ${inactiveStrategies.length} inactive strategies`);
+            
+            // Log each strategy state change
+            data.strategyPerformances.forEach(strategy => {
+              console.log(`[SSE] Strategy "${strategy.strategyName}" [${strategy.timeframe}]: ${strategy.isActive ? 'ACTIVE' : 'INACTIVE'}`);
+            });
+          }
+          
           // Debug log for anonymous users
           if (!session || status !== 'authenticated') {
-            console.log(`📦 [ANONYMOUS] Received data from SSE:`, {
+            console.log(`[ANONYMOUS] Received data from SSE:`, {
               hasStrategyPerformances: !!data.strategyPerformances,
               count: data.strategyPerformances?.length || 0,
               strategies: data.strategyPerformances?.map(p => p.strategyName) || []
@@ -266,6 +284,24 @@ export default function Dashboard() {
       return;
     }
     
+    // Prevent multiple simultaneous toggles of the same strategy
+    if (togglingStrategies.has(strategyName)) {
+      console.log(`⚠️ Strategy "${strategyName}" is already being toggled, ignoring duplicate request`);
+      return;
+    }
+    
+    // Find the strategy to check its current state
+    const strategy = filteredStrategyPerformances.find(p => p.strategyName === strategyName);
+    if (!strategy) {
+      console.warn(`⚠️ Strategy "${strategyName}" not found in current timeframe`);
+      return;
+    }
+    
+    console.log(`🔄 [FRONTEND] Toggling strategy "${strategyName}" (currently ${strategy.isActive ? 'ACTIVE' : 'INACTIVE'})`);
+    
+    // Mark strategy as being toggled to prevent duplicate requests
+    setTogglingStrategies(prev => new Set(prev).add(strategyName));
+    
     try {
       const response = await fetch('/api/trading-shared', {
         method: 'POST',
@@ -280,10 +316,21 @@ export default function Dashboard() {
       if (!response.ok) {
         const error = await response.json();
         console.error('Toggle failed:', error);
+      } else {
+        const result = await response.json();
+        console.log(`✅ [FRONTEND] Strategy "${strategyName}" toggle request sent:`, result);
       }
-      // No need to refresh - data comes via SSE
     } catch (error) {
-      console.error('Error toggling strategy:', error);
+      console.error('❌ [FRONTEND] Error toggling strategy:', error);
+    } finally {
+      // Remove from toggling set after a short delay to allow SSE update to complete
+      setTimeout(() => {
+        setTogglingStrategies(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(strategyName);
+          return newSet;
+        });
+      }, 1000); // 1 second delay to prevent rapid re-toggles
     }
   };
 
@@ -295,36 +342,59 @@ export default function Dashboard() {
 
   const handleSaveStrategy = async (config: CustomStrategyConfig) => {
     try {
-      // Create strategy on ALL timeframes
-      const allTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
-      
-      console.log(`🚀 Creating strategy "${config.name}" on all timeframes...`);
-      
-      // Use multi-timeframe API to create on all TFs at once
-      const response = await fetch('/api/multi-timeframe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          strategyName: config.name,
-          timeframes: allTimeframes,
-          config // Pass the full config
-        })
-      });
-      
-      const data = await response.json();
-      
-      if (response.ok) {
-        console.log(`✅ Strategy "${config.name}" created on ${allTimeframes.length} timeframes!`);
-        setShowStrategyBuilder(false);
+      if (editingStrategy) {
+        // Editing existing strategy
+        console.log(`✏️ Updating strategy "${config.name}" on ${selectedTimeframe} timeframe...`);
         
-        // Strategy is created and StrategyManager reloaded in backend
-        // The next SSE update will include the new strategy automatically
-        console.log('✅ New strategy created! Will appear in next SSE update (no reload needed)');
+        const response = await fetch('/api/multi-timeframe', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            strategyName: config.name,
+            timeframes: [selectedTimeframe],
+            config // Pass the updated config
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          console.log(`Strategy "${config.name}" updated on ${selectedTimeframe} timeframe!`);
+          setShowStrategyBuilder(false);
+          setEditingStrategy(null);
+          console.log('Strategy updated! Will appear in next SSE update');
+        } else {
+          console.error(`Error: ${data.error || 'Failed to update strategy'}`);
+        }
       } else {
-        console.error(`❌ Error: ${data.error || 'Failed to create strategy'}`);
+        // Creating new strategy
+        console.log(`Creating strategy "${config.name}" on ${selectedTimeframe} timeframe...`);
+        
+        const response = await fetch('/api/multi-timeframe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            strategyName: config.name,
+            timeframes: [selectedTimeframe], // UNIQUEMENT la timeframe actuelle
+            config // Pass the full config
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          console.log(`Strategy "${config.name}" created on ${selectedTimeframe} timeframe!`);
+          setShowStrategyBuilder(false);
+          
+          // Strategy is created and StrategyManager reloaded in backend
+          // The next SSE update will include the new strategy automatically
+          console.log('New strategy created! Will appear in next SSE update (no reload needed)');
+        } else {
+          console.error(`Error: ${data.error || 'Failed to create strategy'}`);
+        }
       }
     } catch (error) {
-      console.error('Error creating strategy:', error);
+      console.error('Error saving strategy:', error);
     }
   };
 
@@ -336,10 +406,10 @@ export default function Dashboard() {
       const types: ('aggressive' | 'balanced' | 'conservative')[] = ['aggressive', 'balanced', 'conservative'];
       const randomType = types[Math.floor(Math.random() * types.length)];
       
-      console.log(`🤖 Generating ${randomType} strategy with AI...`);
+      console.log(`Generating ${randomType} strategy with AI...`);
       
-      // Préparer le contexte des stratégies existantes
-      const existingStrategies = strategyPerformances.map(perf => {
+      // Préparer le contexte des stratégies existantes (UNIQUEMENT de la timeframe actuelle)
+      const existingStrategies = filteredStrategyPerformances.map(perf => {
         // Extraire les conditions principales si disponibles
         const criteria = getCriteriaForStrategy?.(perf.strategyType as any, perf);
         
@@ -357,14 +427,15 @@ export default function Dashboard() {
         };
       });
       
-      // Générer la stratégie avec l'IA
+      // Générer la stratégie avec l'IA pour la timeframe ACTUELLE
       const aiResponse = await fetch('/api/ai-strategy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: '', // Pas d'instructions custom
           type: randomType,
-          existingStrategies // Envoyer les stratégies existantes
+          existingStrategies, // Envoyer les stratégies existantes
+          timeframe: selectedTimeframe // Passer la timeframe actuelle
         })
       });
 
@@ -372,32 +443,31 @@ export default function Dashboard() {
       try {
         aiData = await aiResponse.json();
       } catch (jsonError: any) {
-        console.error('❌ Failed to parse AI response:', jsonError);
+        console.error('Failed to parse AI response:', jsonError);
         throw new Error('Invalid response from AI API');
       }
 
       if (!aiResponse.ok) {
-        console.error('❌ AI API error:', aiData.error);
+        console.error('AI API error:', aiData.error);
         throw new Error(aiData.error || 'Failed to generate strategy');
       }
 
       const generatedStrategy = aiData.strategy;
       
       if (!generatedStrategy || !generatedStrategy.name) {
-        console.error('❌ Invalid strategy structure:', generatedStrategy);
+        console.error('Invalid strategy structure:', generatedStrategy);
         throw new Error('AI generated invalid strategy');
       }
       
-      console.log('✅ Strategy generated:', generatedStrategy.name);
+      console.log('Strategy generated:', generatedStrategy.name);
 
-      // Save strategy on ALL timeframes using multi-timeframe API
-      const allTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+      // Save strategy ONLY on the CURRENT timeframe
       const saveResponse = await fetch('/api/multi-timeframe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           strategyName: generatedStrategy.name,
-          timeframes: allTimeframes,
+          timeframes: [selectedTimeframe], // UNIQUEMENT la timeframe actuelle
           config: generatedStrategy
         })
       });
@@ -405,18 +475,18 @@ export default function Dashboard() {
       const saveData = await saveResponse.json();
 
       if (saveResponse.ok) {
-        console.log(`✨ AI Strategy "${generatedStrategy.name}" created on all timeframes!`);
-        console.log(`📊 Type: ${randomType.toUpperCase()}`);
-        console.log(`💡 ${generatedStrategy.description}`);
+        console.log(`AI Strategy "${generatedStrategy.name}" created on ${selectedTimeframe} timeframe!`);
+        console.log(`Type: ${randomType.toUpperCase()}`);
+        console.log(`${generatedStrategy.description}`);
         
         // Strategy is created and StrategyManager reloaded in backend
         // The next SSE update will include the new strategy automatically
-        console.log('✅ New AI strategy created! Will appear in next SSE update (no reload needed)');
+        console.log(`New AI strategy created for ${selectedTimeframe}! Will appear in next SSE update (no reload needed)`);
       } else {
-        console.error(`❌ Error saving: ${saveData.error || 'Failed to save strategy'}`);
+        console.error(`Error saving: ${saveData.error || 'Failed to save strategy'}`);
       }
     } catch (error: any) {
-      console.error('❌ Error generating AI strategy:', error);
+      console.error('Error generating AI strategy:', error);
     } finally {
       setIsGeneratingAI(false);
     }
@@ -534,11 +604,11 @@ export default function Dashboard() {
 
   const getSignalIcon = (type: 'BUY' | 'SELL' | 'HOLD' | 'CLOSE_LONG' | 'CLOSE_SHORT') => {
     switch (type) {
-      case 'BUY': return '📈';
-      case 'SELL': return '📉';
-      case 'CLOSE_LONG': return '🔴';
-      case 'CLOSE_SHORT': return '🟢';
-      case 'HOLD': return '⏸️';
+      case 'BUY': return <HiTrendingUp className="w-4 h-4" />;
+      case 'SELL': return <HiTrendingDown className="w-4 h-4" />;
+      case 'CLOSE_LONG': return <HiXCircle className="w-4 h-4 text-red-500" />;
+      case 'CLOSE_SHORT': return <HiCheckCircle className="w-4 h-4 text-green-500" />;
+      case 'HOLD': return <HiStop className="w-4 h-4" />;
     }
   };
 
@@ -551,11 +621,11 @@ export default function Dashboard() {
   const getEMAStatus = () => {
     if (!state) return null;
     if (state.ema50 > state.ema200) {
-      return <span className="text-green-500">🚀 Tendance haussière</span>;
+      return <span className="text-green-500 flex items-center gap-1"><HiArrowUp className="w-4 h-4" /> Tendance haussière</span>;
     } else if (state.ema50 < state.ema200) {
-      return <span className="text-red-500">📉 Tendance baissière</span>;
+      return <span className="text-red-500 flex items-center gap-1"><HiTrendingDown className="w-4 h-4" /> Tendance baissière</span>;
     }
-    return <span className="text-gray-500">➡️ Neutre</span>;
+    return <span className="text-gray-500 flex items-center gap-1"><HiArrowRight className="w-4 h-4" /> Neutre</span>;
   };
 
   // Get criteria for a specific strategy type
@@ -829,7 +899,7 @@ export default function Dashboard() {
       };
       
       // Debug pour Trend Follower
-      console.log('🔍 TREND_FOLLOWER Criteria:', {
+      console.log('TREND_FOLLOWER Criteria:', {
         price: state.currentPrice,
         ema50: state.ema50,
         priceAboveEma50,
@@ -1470,13 +1540,13 @@ export default function Dashboard() {
             
             // Enhanced tooltip with formula and color status
             const statusEmoji = 
-              data.status === 'green' ? '🟢' :
-              data.status === 'orange' ? '🟠' :
-              '⚪';
+              data.status === 'green' ? <HiCheckCircle className="w-4 h-4 text-green-500" /> :
+              data.status === 'orange' ? <HiExclamationCircle className="w-4 h-4 text-orange-500" /> :
+              <HiXCircle className="w-4 h-4 text-gray-500" />;
             
             const tooltipText = data.formula 
-              ? `${statusEmoji} ${name}\n${data.formula}`
-              : `${name}: ${data.value ? '✓ Met' : '✗ Not met'}`;
+              ? `${name}\n${data.formula}`
+              : `${name}: ${data.value ? 'Met' : 'Not met'}`;
             
             return (
               <span 
@@ -1484,6 +1554,7 @@ export default function Dashboard() {
                 className={`flex items-center gap-1 ${statusColor}`}
                 title={tooltipText}
               >
+                {statusEmoji}
                 <span className={`w-1 h-1 rounded-full ${getStatusClass(data.status)}`}></span>
                 {name}
               </span>
@@ -1624,10 +1695,10 @@ export default function Dashboard() {
             </span>
             <span 
               className={`flex items-center gap-1 ${criteriaData.volumeOrVolatilityStatus === 'green' ? 'text-green-400' : criteriaData.volumeOrVolatilityStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-              title={`Volume spike: ${criteriaData.volumeSpike ? '✓' : '✗'} | Volatilité: ${criteriaData.volatilityHigh ? '✓' : '✗'}`}
+              title={`Volume spike: ${criteriaData.volumeSpike ? 'Met' : 'Not met'} | Volatilité: ${criteriaData.volatilityHigh ? 'Met' : 'Not met'}`}
             >
               <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volumeOrVolatilityStatus)}`}></span>
-              {criteriaData.volumeSpike ? '📊' : '⚡'}Vol
+              {criteriaData.volumeSpike ? <HiChartBar className="w-3 h-3" /> : <HiLightningBolt className="w-3 h-3" />}Vol
             </span>
             <span 
               className={`flex items-center gap-1 ${criteriaData.priceBelowVWAPStatus === 'green' ? 'text-green-400' : criteriaData.priceBelowVWAPStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
@@ -1665,10 +1736,10 @@ export default function Dashboard() {
             </span>
             <span 
               className={`flex items-center gap-1 ${criteriaData.volumeOrVolatilityStatus === 'green' ? 'text-green-400' : criteriaData.volumeOrVolatilityStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
-              title={`Volume spike: ${criteriaData.volumeSpike ? '✓' : '✗'} | Volatilité: ${criteriaData.volatilityHigh ? '✓' : '✗'}`}
+              title={`Volume spike: ${criteriaData.volumeSpike ? 'Met' : 'Not met'} | Volatilité: ${criteriaData.volatilityHigh ? 'Met' : 'Not met'}`}
             >
               <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.volumeOrVolatilityStatus)}`}></span>
-              {criteriaData.volumeSpike ? '📊' : '⚡'}Vol
+              {criteriaData.volumeSpike ? <HiChartBar className="w-3 h-3" /> : <HiLightningBolt className="w-3 h-3" />}Vol
             </span>
             <span 
               className={`flex items-center gap-1 ${criteriaData.priceAboveVWAPStatus === 'green' ? 'text-green-400' : criteriaData.priceAboveVWAPStatus === 'orange' ? 'text-orange-400' : 'text-gray-500'}`}
@@ -1771,7 +1842,7 @@ export default function Dashboard() {
               title="Tendance confirmée (3 bougies consécutives)"
             >
               <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.trendConfirmedStatus)}`}></span>
-              Conf✓
+              Conf<HiCheck className="w-3 h-3" />
             </span>
           </>
         );
@@ -1798,7 +1869,7 @@ export default function Dashboard() {
               title="Tendance confirmée (3 bougies consécutives)"
             >
               <span className={`w-1 h-1 rounded-full ${getStatusClass(criteriaData.trendConfirmedStatus)}`}></span>
-              Conf✓
+              Conf<HiCheck className="w-3 h-3" />
             </span>
           </>
         );
@@ -2069,12 +2140,13 @@ export default function Dashboard() {
                         key={tf}
                         onClick={() => changeTimeframe(tf)}
                         disabled={isChangingTimeframe}
-                        className={`px-2.5 py-1 text-xs font-medium transition-all rounded ${
+                        className={`px-2.5 py-1 text-xs font-medium transition-all rounded flex items-center gap-1 ${
                           selectedTimeframe === tf
                             ? 'bg-gradient-to-r from-sky-500 to-cyan-500 text-white shadow-md shadow-sky-500/30'
                             : 'text-gray-400 hover:text-sky-400 hover:bg-gray-800'
                         } ${isChangingTimeframe ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
+                        <HiClock className="w-3 h-3" />
                         {tf}
                       </button>
                     ))}
@@ -2138,8 +2210,12 @@ export default function Dashboard() {
             
             {/* Monitoring Status */}
             {isConnecting ? (
-              <div className="bg-gradient-to-r from-sky-500 to-cyan-500 text-white px-4 py-2 rounded text-sm font-medium shadow-lg shadow-sky-500/30">
-                ⏳ Connecting...
+              
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+                <span className="text-sm font-medium text-orange-400">
+                  CONNECTING
+                </span>
               </div>
             ) : isConnected ? (
               <div className="flex items-center gap-2">
@@ -2169,12 +2245,13 @@ export default function Dashboard() {
                  key={timeframe}
                  onClick={() => changeTimeframe(timeframe)}
                  disabled={isChangingTimeframe}
-                 className={`px-3 py-1 text-sm rounded font-medium transition-all ${
+                 className={`px-3 py-1 text-sm rounded font-medium transition-all flex items-center gap-2 ${
                    selectedTimeframe === timeframe
                      ? 'bg-gradient-to-r from-sky-500 to-cyan-500 text-white shadow-lg shadow-sky-500/30'
                      : 'text-gray-400 hover:text-sky-400 hover:bg-gray-700'
                  } ${isChangingTimeframe ? 'opacity-50 cursor-not-allowed' : ''}`}
                >
+                 <HiClock className="w-4 h-4" />
                  {timeframe}
                </button>
              ))}
@@ -2205,6 +2282,24 @@ export default function Dashboard() {
                )}
              </div>
            )}
+           
+           {/* Indicators Buttons */}
+           <div className="flex items-center gap-2 ml-auto">
+             <button
+               onClick={() => setTriggerIndicatorsOverlay(true)}
+               className="px-3 py-1 text-sm rounded font-medium transition-all flex items-center gap-2 text-gray-400 hover:text-blue-400 hover:bg-gray-700"
+             >
+               <HiChartBar className="w-4 h-4" />
+               Indicators
+             </button>
+             <button
+               onClick={() => setTriggerAdvancedIndicatorsOverlay(true)}
+               className="px-3 py-1 text-sm rounded font-medium transition-all flex items-center gap-2 text-gray-400 hover:text-purple-400 hover:bg-gray-700"
+             >
+               <HiChartBar className="w-4 h-4" />
+               Advanced
+             </button>
+           </div>
          </div>
        </div>
 
@@ -2637,10 +2732,16 @@ export default function Dashboard() {
               currentTimeframe={selectedTimeframe}
               isStatsSticky={isStatsSticky}
               onToggleStrategy={handleToggleStrategy}
+              togglingStrategies={togglingStrategies}
               selectedStrategy={selectedStrategy}
               onSelectStrategy={setSelectedStrategy}
               onRefresh={onRefresh}
               advancedIndicators={state}
+              basicIndicators={state}
+              triggerIndicatorsOverlay={triggerIndicatorsOverlay}
+              onIndicatorsOverlayTriggered={() => setTriggerIndicatorsOverlay(false)}
+              triggerAdvancedIndicatorsOverlay={triggerAdvancedIndicatorsOverlay}
+              onAdvancedIndicatorsOverlayTriggered={() => setTriggerAdvancedIndicatorsOverlay(false)}
               onConfigChange={(!session || status !== 'authenticated') ? undefined : async (strategyName, config) => {
                 // Update local cache immediately for instant UI feedback
                 setLocalConfigCache(prev => ({
@@ -2663,9 +2764,9 @@ export default function Dashboard() {
                   
                   const result = await response.json();
                   if (result.success) {
-                    console.log(`✅ Config saved for ${strategyName} [${selectedTimeframe}]`);
+                    console.log(`Config saved for ${strategyName} [${selectedTimeframe}]`);
                   } else {
-                    console.error(`❌ Failed to save config:`, result.error);
+                    console.error(`Failed to save config:`, result.error);
                   }
                 } catch (error) {
                   console.error('Error saving config:', error);
@@ -2807,12 +2908,12 @@ export default function Dashboard() {
                       method: 'DELETE'
                     });
                     if (response.ok) {
-                      console.log(`✅ Deleted ${strategyName} [${tf}]`);
+                      console.log(`Deleted ${strategyName} [${tf}]`);
                     }
                   }
                   
                   // Reload strategies via SSE (will update automatically)
-                  console.log('✅ Strategy deleted, data will update via SSE');
+                  console.log('Strategy deleted, data will update via SSE');
                 } catch (error) {
                   console.error('Error deleting strategy:', error);
                 }
@@ -2832,6 +2933,11 @@ export default function Dashboard() {
                 } catch (error) {
                   console.error('Error fetching all performances:', error);
                 }
+              }}
+              onEditStrategy={(strategyName, config) => {
+                // Ouvrir l'éditeur de stratégie avec la configuration existante
+                setEditingStrategy({ name: strategyName, config });
+                setShowStrategyBuilder(true);
               }}
             />
           )}
@@ -2874,7 +2980,7 @@ export default function Dashboard() {
 
       {!state && !isConnecting && (
         <div className="text-center py-20 bg-gray-800">
-          <div className="text-6xl mb-4">🤖</div>
+          <div className="text-6xl mb-4 flex justify-center"><HiCog className="w-16 h-16" /></div>
           <h2 className="text-2xl font-semibold mb-2 text-white">Bot en attente</h2>
           <p className="text-gray-400">Cliquez sur &quot;Start Bot&quot; pour commencer le trading</p>
         </div>
@@ -2884,7 +2990,28 @@ export default function Dashboard() {
       {showStrategyBuilder && (
         <StrategyBuilder
           onSave={handleSaveStrategy}
-          onClose={() => setShowStrategyBuilder(false)}
+          onClose={() => {
+            setShowStrategyBuilder(false);
+            setEditingStrategy(null);
+          }}
+          currentTimeframe={selectedTimeframe}
+          initialConfig={editingStrategy ? {
+            name: editingStrategy.name,
+            description: editingStrategy.config.description || '',
+            color: editingStrategy.config.color || 'emerald',
+            timeframe: selectedTimeframe,
+            profitTargetPercent: editingStrategy.config.profitTargetPercent || 2.0,
+            stopLossPercent: editingStrategy.config.stopLossPercent || 1.0,
+            maxPositionTime: editingStrategy.config.maxPositionTime || 60,
+            cooldownPeriod: editingStrategy.config.cooldownPeriod || 5,
+            longEntryConditions: editingStrategy.config.longEntryConditions || { conditions: [], operator: 'AND' },
+            shortEntryConditions: editingStrategy.config.shortEntryConditions || { conditions: [], operator: 'AND' },
+            longExitConditions: editingStrategy.config.longExitConditions || { conditions: [], operator: 'AND' },
+            shortExitConditions: editingStrategy.config.shortExitConditions || { conditions: [], operator: 'AND' },
+            positionSize: editingStrategy.config.positionSize || 1,
+            strategyType: editingStrategy.config.strategyType || 'CUSTOM',
+            simulationMode: editingStrategy.config.simulationMode !== undefined ? editingStrategy.config.simulationMode : true
+          } : undefined}
         />
       )}
 
@@ -2899,50 +3026,6 @@ export default function Dashboard() {
             setAllTimeframePerformances([]);
           }}
         />
-      )}
-
-      {/* Advanced Indicators Modal */}
-      {showAdvancedIndicators && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm">
-          <div className="bg-gray-800 border border-gray-700 rounded-2xl p-6 max-w-6xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-bold text-white">Advanced Technical Indicators</h2>
-              <button
-                onClick={() => setShowAdvancedIndicators(false)}
-                className="text-gray-400 hover:text-white text-2xl"
-              >
-                ×
-              </button>
-            </div>
-            
-            {isLoadingIndicators ? (
-              <div className="text-center py-8">
-                <div className="text-gray-400 mb-4">
-                  <div className="animate-spin w-16 h-16 mx-auto mb-4 border-4 border-blue-500 border-t-transparent rounded-full"></div>
-                  <p>Loading advanced indicators...</p>
-                </div>
-              </div>
-            ) : advancedIndicators ? (
-              <div className="space-y-6">
-                <IndicatorCategoryTabs 
-                  indicators={advancedIndicators}
-                  onIndicatorClick={(indicator, value) => {
-                    console.log(`Selected indicator: ${indicator} = ${value}`);
-                  }}
-                />
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <div className="text-gray-400 mb-4">
-                  <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
-                  <p>No indicators available</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
       )}
 
       {/* Login Required Modal */}

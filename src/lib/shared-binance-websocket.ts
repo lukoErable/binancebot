@@ -176,7 +176,7 @@ class SharedBinanceWebSocket {
           if (this.candles.length > 300) {
             this.candles.shift();
           }
-          console.log(`📈 [SHARED ${this.timeframe}] New candle: ${newCandle.close.toFixed(2)} USDT`);
+          console.log(`[SHARED ${this.timeframe}] New candle: ${newCandle.close.toFixed(2)} USDT`);
         }
         
         // Calculate indicators ONCE for all users

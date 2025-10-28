@@ -2,6 +2,7 @@ import { Candle, StrategyPerformance } from '@/types/trading';
 import { CustomStrategy, CustomStrategyConfig } from './custom-strategy';
 import CustomStrategyRepository from './db/custom-strategy-repository';
 import StrategyRepository from './db/strategy-repository';
+import { periodicActivationSaver } from './periodic-activation-saver';
 
 // Global singleton instance - created ONCE at server startup
 let globalStrategyManagerInstance: StrategyManager | null = null;
@@ -21,6 +22,7 @@ export class StrategyManager {
     activatedAt?: number | null;
     totalActiveTime?: number;
   }>;
+  private togglingStrategies = new Set<string>(); // Track strategies being toggled to prevent race conditions
 
   constructor() {
     this.strategies = new Map();
@@ -28,7 +30,7 @@ export class StrategyManager {
     // Store as global singleton
     if (!globalStrategyManagerInstance) {
       globalStrategyManagerInstance = this;
-      console.log('🚀 StrategyManager: Created singleton instance');
+      console.log('StrategyManager: Created singleton instance');
       
       // Load custom strategies from database FIRST
       this.loadCustomStrategies().then(() => {
@@ -94,6 +96,14 @@ export class StrategyManager {
    */
   private getStrategyKey(name: string, timeframe: string): string {
     return `${name}:${timeframe}`;
+  }
+
+  /**
+   * Public method to check if a strategy exists
+   */
+  hasStrategy(name: string, timeframe: string): boolean {
+    const key = this.getStrategyKey(name, timeframe);
+    return this.strategies.has(key);
   }
 
   /**
@@ -166,12 +176,12 @@ export class StrategyManager {
           
           const totalMinutes = Math.floor((strategyData.totalActiveTime || 0) / 60);
           const currentMinutes = strategyData.activatedAt ? Math.floor((Date.now() - strategyData.activatedAt) / 60000) : 0;
-          console.log(`📊 Loaded strategy state: ${strategyName} [${timeframe}] = ${isActive ? 'ON' : 'OFF'} (independent timer: ${totalMinutes}m${currentMinutes > 0 ? ' + current: ' + currentMinutes + 'm' : ''})`);
+          console.log(`Loaded strategy state: ${strategyName} [${timeframe}] = ${isActive ? 'ON' : 'OFF'} (independent timer: ${totalMinutes}m${currentMinutes > 0 ? ' + current: ' + currentMinutes + 'm' : ''})`);
         }
       });
 
       // OPTIMIZATION: Load ALL trades and positions in TWO queries (instead of 21+21)
-      console.log('📊 Loading ALL trades in single query (optimization)...');
+      console.log('Loading ALL trades in single query (optimization)...');
       const { CompletedTradeRepository } = await import('./db/completed-trade-repository');
       const { default: OpenPositionRepository } = await import('./db/open-position-repository');
       
@@ -262,6 +272,9 @@ export class StrategyManager {
           totalActiveTime
         });
         
+        // Register strategy in periodic saver
+        periodicActivationSaver.registerStrategy(config.name, timeframe, activatedAt, totalActiveTime, userEmail);
+        
         // Update database to reset activatedAt for active strategies
         if (isActive) {
           StrategyRepository.updateStrategyStatusWithTime(
@@ -286,50 +299,69 @@ export class StrategyManager {
   /**
    * Toggle strategy active state for a specific timeframe
    * Each timeframe is now INDEPENDENT (no shared timer)
+   * Added protection against race conditions
    */
   async toggleStrategy(name: string, timeframe: string = '1m'): Promise<boolean> {
     const key = this.getStrategyKey(name, timeframe);
+    
+    // Check if strategy is already being toggled to prevent race conditions
+    if (this.togglingStrategies.has(key)) {
+      console.log(`⚠️ Strategy "${name}" [${timeframe}] is already being toggled, ignoring duplicate request`);
+      return false;
+    }
+    
     const strategyData = this.strategies.get(key);
     if (!strategyData) return false;
 
-    const wasActive = strategyData.isActive;
-    const newState = !strategyData.isActive;
-    
-    // Get current time for THIS timeframe only (independent)
-    let localTotalTime = strategyData.totalActiveTime || 0;
-    let localActivatedAt = strategyData.activatedAt || null;
-    
-    if (newState) {
-      // Activating: Start timer for THIS timeframe
-      localActivatedAt = Date.now();
-      strategyData.activatedAt = localActivatedAt;
-      strategyData.isActive = true;
-      console.log(`🔄 Strategy "${name}" [${timeframe}] ACTIVATED (independent timer: ${Math.floor(localTotalTime / 60)}m)`);
-    } else {
-      // Deactivating: Add elapsed time to THIS timeframe's total
-      if (localActivatedAt) {
-        const elapsedSeconds = Math.floor((Date.now() - localActivatedAt) / 1000);
-        localTotalTime = localTotalTime + elapsedSeconds;
-        console.log(`⏸️ Strategy "${name}" [${timeframe}] PAUSED (session: ${elapsedSeconds}s, total: ${localTotalTime}s)`);
+    // Mark strategy as being toggled
+    this.togglingStrategies.add(key);
+
+    try {
+      const wasActive = strategyData.isActive;
+      const newState = !strategyData.isActive;
+      
+      // Get current time for THIS timeframe only (independent)
+      let localTotalTime = strategyData.totalActiveTime || 0;
+      let localActivatedAt = strategyData.activatedAt || null;
+      
+      if (newState) {
+        // Activating: Start timer for THIS timeframe
+        localActivatedAt = Date.now();
+        strategyData.activatedAt = localActivatedAt;
+        strategyData.isActive = true;
+        console.log(`🔄 Strategy "${name}" [${timeframe}] ACTIVATED (independent timer: ${Math.floor(localTotalTime / 60)}m)`);
+      } else {
+        // Deactivating: Add elapsed time to THIS timeframe's total
+        if (localActivatedAt) {
+          const elapsedSeconds = Math.floor((Date.now() - localActivatedAt) / 1000);
+          localTotalTime = localTotalTime + elapsedSeconds;
+          console.log(`⏸️ Strategy "${name}" [${timeframe}] PAUSED (session: ${elapsedSeconds}s, total: ${localTotalTime}s)`);
+        }
+        localActivatedAt = null;
+        strategyData.activatedAt = null;
+        strategyData.isActive = false;
       }
-      localActivatedAt = null;
-      strategyData.activatedAt = null;
-      strategyData.isActive = false;
+      
+      // Update local time for THIS timeframe only
+      strategyData.totalActiveTime = localTotalTime;
+      
+      // Update in periodic saver
+      periodicActivationSaver.updateStrategy(name, timeframe, localActivatedAt, localTotalTime);
+      
+      // Save to database (per-timeframe, independent)
+      await StrategyRepository.updateStrategyStatusWithTime(
+        name,
+        newState,
+        localActivatedAt,
+        localTotalTime,
+        timeframe
+      );
+      
+      return newState;
+    } finally {
+      // Always remove from toggling set, even if an error occurred
+      this.togglingStrategies.delete(key);
     }
-    
-    // Update local time for THIS timeframe only
-    strategyData.totalActiveTime = localTotalTime;
-    
-    // Save to database (per-timeframe, independent)
-    await StrategyRepository.updateStrategyStatusWithTime(
-      name,
-      newState,
-      localActivatedAt,
-      localTotalTime,
-      timeframe
-    );
-    
-    return newState;
   }
 
 

@@ -12,7 +12,7 @@ async function displayDatabaseInfo() {
   try {
     console.log('\n');
     console.log('═'.repeat(120));
-    console.log('📊 TRADING BOT - DATABASE STRUCTURE & DATA');
+    console.log('📊 TRADING BOT 👑 - DATABASE STRUCTURE & DATA');
     console.log('═'.repeat(120));
     
     // ==================== DATABASE STRUCTURE ====================

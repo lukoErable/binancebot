@@ -132,7 +132,7 @@ const DEFAULT_STRATEGIES: Omit<CustomStrategyConfig, 'timeframe'>[] = [
  */
 export async function initializeDefaultStrategies(userEmail: string): Promise<void> {
   try {
-    console.log(`🎯 Initializing default strategies for ${userEmail}...`);
+    console.log(`Initializing default strategies for ${userEmail}...`);
     
     for (const strategy of DEFAULT_STRATEGIES) {
       const config: CustomStrategyConfig = {

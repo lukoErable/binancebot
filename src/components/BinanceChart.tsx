@@ -2,7 +2,7 @@
 
 import { StrategyPerformance, StrategyState } from '@/types/trading';
 import { useEffect, useState } from 'react';
-import { HiClock } from 'react-icons/hi';
+import { HiClock, HiEye, HiEyeOff, HiX } from 'react-icons/hi';
 import { CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface BinanceChartProps {
@@ -439,38 +439,42 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowEMA12(!showEMA12)}
-                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                     showEMA12 ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide utilisé par Momentum Crossover"
                 >
+                  {showEMA12 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                   EMA(12)
                 </button>
                 <button
                   onClick={() => setShowEMA26(!showEMA26)}
-                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                     showEMA26 ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen utilisé par Momentum Crossover"
                 >
+                  {showEMA26 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                   EMA(26)
                 </button>
                 <button
                   onClick={() => setShowEMA50(!showEMA50)}
-                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                     showEMA50 ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme utilisé par le bot"
                 >
+                  {showEMA50 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                   EMA(50)
                 </button>
                 <button
                   onClick={() => setShowEMA200(!showEMA200)}
-                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                  className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                     showEMA200 ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'
                   }`}
                   title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Indicateur de tendance long terme utilisé par le bot"
                 >
+                  {showEMA200 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                   EMA(200)
                 </button>
               </div>
@@ -505,12 +509,10 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
               {/* Close Fullscreen Button */}
               <button
                 onClick={() => setIsFullscreen(false)}
-                  className="ml-2 p-1.5 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                className="ml-2 p-1.5 bg-red-600 hover:bg-red-700 text-white rounded transition-colors flex items-center justify-center"
                 title="Quitter le plein écran"
               >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                <HiX className="w-4 h-4" />
               </button>
               </div>
             </div>
@@ -752,38 +754,42 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowEMA12(!showEMA12)}
-                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                   showEMA12 ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(12): Moyenne mobile exponentielle sur 12 périodes - Indicateur de momentum rapide utilisé par Momentum Crossover"
               >
+                {showEMA12 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                 EMA(12)
               </button>
               <button
                 onClick={() => setShowEMA26(!showEMA26)}
-                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                   showEMA26 ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(26): Moyenne mobile exponentielle sur 26 périodes - Indicateur de momentum moyen utilisé par Momentum Crossover"
               >
+                {showEMA26 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                 EMA(26)
               </button>
               <button
                 onClick={() => setShowEMA50(!showEMA50)}
-                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                   showEMA50 ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(50): Moyenne mobile exponentielle sur 50 périodes - Indicateur de tendance court terme utilisé par le bot"
               >
+                {showEMA50 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                 EMA(50)
               </button>
               <button
                 onClick={() => setShowEMA200(!showEMA200)}
-                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
                   showEMA200 ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'
                 }`}
                 title="EMA(200): Moyenne mobile exponentielle sur 200 périodes - Indicateur de tendance long terme utilisé par le bot"
               >
+                {showEMA200 ? <HiEye className="w-3 h-3" /> : <HiEyeOff className="w-3 h-3" />}
                 EMA(200)
               </button>
             </div>
@@ -818,12 +824,10 @@ export default function BinanceChart({ state, selectedStrategy = 'GLOBAL', strat
           {/* Fullscreen Button */}
           <button
             onClick={() => setIsFullscreen(true)}
-                className="ml-2 p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded transition-colors"
+            className="ml-2 p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded transition-colors flex items-center justify-center"
             title="Afficher en plein écran"
           >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                </svg>
+            <HiEye className="w-4 h-4" />
           </button>
             </div>
         </div>

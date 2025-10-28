@@ -43,6 +43,7 @@ export class CustomStrategyRepository {
         type = $3,
         config = $5::jsonb,
         updated_at = CURRENT_TIMESTAMP
+        -- Note: is_active is NOT updated to preserve existing activation status
     `, [userEmail, config.name, config.strategyType, false, configJson, timeframe]);
     
     // Clear cache after saving
