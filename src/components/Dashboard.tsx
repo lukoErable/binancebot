@@ -153,7 +153,11 @@ export default function Dashboard() {
     const tf = timeframe || selectedTimeframe;
     const tm = trading !== undefined ? trading : false; // Always start in monitoring mode
     
-    setIsConnecting(true);
+    // Ne pas afficher le loading si on a déjà des données en cache
+    const hasCachedData = timeframeStates[tf] !== undefined;
+    if (!hasCachedData) {
+      setIsConnecting(true);
+    }
     
     // Add timeout to prevent infinite loading
     const connectionTimeout = setTimeout(() => {
@@ -199,6 +203,9 @@ export default function Dashboard() {
           // Clear timeout on first message
           clearTimeout(connectionTimeout);
           
+          // Arrêter le loading de connexion
+          setIsConnecting(false);
+          
           // Update RL enabled strategies from SSE
           if (data.rlEnabledStrategies) {
             setRlEnabledStrategies(new Set(data.rlEnabledStrategies));
@@ -211,6 +218,12 @@ export default function Dashboard() {
               perf => perf.timeframe === data.timeframe
             );
             setStrategyPerformances(currentTimeframePerformances);
+            
+            // Arrêter le loading si on était en train de changer de timeframe
+            if (isChangingTimeframe && data.timeframe === selectedTimeframe) {
+              setIsChangingTimeframe(false);
+              console.log(`✅ Timeframe ${data.timeframe} data loaded, stopping loading state`);
+            }
           }
           
           // Update cache for ALL timeframes based on strategy performances
@@ -541,34 +554,57 @@ export default function Dashboard() {
   const changeTimeframe = async (timeframe: string) => {
     if (timeframe === selectedTimeframe) return; // Éviter les changements inutiles
     
-    // Changement instantané - pas de loading si on a déjà les données en cache
+    // Vérifier si on a des données en cache pour cette timeframe
     const hasCachedData = timeframeStates[timeframe] !== undefined;
+    const cachedStrategies = timeframeStates[timeframe]?.strategyPerformances || [];
     
-    if (!hasCachedData) {
-      setIsChangingTimeframe(true);
+    // Si on a des données en cache, transition instantanée sans loading
+    if (hasCachedData && cachedStrategies.length > 0) {
+      console.log(`🔄 Switching to ${timeframe} (cached data available)`);
+      setSelectedTimeframe(timeframe);
+      
+      // Mettre à jour immédiatement les performances avec les données en cache
+      setStrategyPerformances(cachedStrategies);
+      
+      // Informer le backend en arrière-plan sans attendre
+      if (isConnected) {
+        fetch('/api/trading-shared', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'changeTimeframe',
+            timeframe
+          })
+        }).catch(error => {
+          console.error('Error changing timeframe:', error);
+        });
+      }
+      return;
     }
     
-    // Mise à jour instantanée de l'UI avec les données en cache
+    // Pas de données en cache - afficher un loading minimal
+    console.log(`🔄 Switching to ${timeframe} (loading data...)`);
+    setIsChangingTimeframe(true);
     setSelectedTimeframe(timeframe);
     
-    // Informer le backend en arrière-plan (ne pas attendre)
+    // Informer le backend et attendre les données
     if (isConnected) {
-      fetch('/api/trading-shared', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'changeTimeframe',
-          timeframe
-        })
-      })
-        .then(() => {
-          // Les nouvelles données arriveront via SSE et mettront à jour le cache
-          setIsChangingTimeframe(false);
-        })
-        .catch(error => {
-          console.error('Error changing timeframe:', error);
-          setIsChangingTimeframe(false);
+      try {
+        await fetch('/api/trading-shared', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'changeTimeframe',
+            timeframe
+          })
         });
+        
+        // Les données arriveront via SSE et mettront à jour le cache
+        // Le loading sera arrêté par le SSE handler
+      } catch (error) {
+        console.error('Error changing timeframe:', error);
+        setIsChangingTimeframe(false);
+      }
     } else {
       setIsChangingTimeframe(false);
     }
@@ -2201,16 +2237,6 @@ export default function Dashboard() {
                       </button>
                     ))}
                     <div className="h-5 w-px bg-gray-700 ml-1"></div>
-                    <div className="ml-1 flex flex-col items-start">
-                      <span className="text-xs text-cyan-400 leading-tight">
-                        {filteredStrategyPerformances.filter(p => p.isActive).length}/{filteredStrategyPerformances.length} stratégie{filteredStrategyPerformances.length > 1 ? 's' : ''} sur {selectedTimeframe}
-                      </span>
-                      {strategyPerformances.length > filteredStrategyPerformances.length && (
-                        <span className="text-[10px] text-gray-500 leading-tight">
-                          ({strategyPerformances.length - filteredStrategyPerformances.length} autre{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''} timeframes)
-                        </span>
-                      )}
-                    </div>
                   </div>
                 ) : (() => {
                   const selectedStrategyData = strategyPerformances.find(p => p.strategyName === selectedStrategy);
@@ -2319,17 +2345,6 @@ export default function Dashboard() {
                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                </svg>
                <span>Loading {selectedTimeframe} data...</span>
-             </div>
-           )}
-           {!isChangingTimeframe && filteredStrategyPerformances.length > 0 && (
-             <div className="flex items-center gap-2 text-gray-400 text-xs">
-               <span className="font-medium">{filteredStrategyPerformances.length}</span>
-               <span>stratégie{filteredStrategyPerformances.length > 1 ? 's' : ''} sur {selectedTimeframe}</span>
-               {strategyPerformances.length > filteredStrategyPerformances.length && (
-                 <span className="text-cyan-400">
-                   ({strategyPerformances.length - filteredStrategyPerformances.length} autre{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''} timeframe{strategyPerformances.length - filteredStrategyPerformances.length > 1 ? 's' : ''})
-                 </span>
-               )}
              </div>
            )}
            
@@ -2497,7 +2512,10 @@ export default function Dashboard() {
           }`}>
             {(() => {
               const metrics = getSelectedMetrics();
-              if (!metrics) return <TradingInfoSkeleton />;
+              if (!metrics && !isChangingTimeframe) return <TradingInfoSkeleton />;
+              
+              // Si on est en train de changer de timeframe, afficher les métriques existantes ou un skeleton
+              if (isChangingTimeframe && !metrics) return <TradingInfoSkeleton />;
 
               return (
                 <>
@@ -2507,15 +2525,15 @@ export default function Dashboard() {
                     <div className="flex flex-col" title="Position actuelle: LONG (achat), SHORT (vente à découvert), ou NONE (aucune position)">
                       <span className="text-gray-400 text-xs mb-1">POSITION</span>
                       <span className={`font-bold ${
-                        metrics.position.type === 'LONG' ? 'text-green-400' : 
-                        metrics.position.type === 'SHORT' ? 'text-red-400' : 
+                        metrics?.position?.type === 'LONG' ? 'text-green-400' : 
+                        metrics?.position?.type === 'SHORT' ? 'text-red-400' : 
                         'text-gray-400'
                       }`}>
-                        {metrics.position.type}
+                        {metrics?.position?.type || 'NONE'}
                       </span>
-                      {metrics.position.type !== 'NONE' && (
-                        <span className="text-xs text-gray-500" title={`Prix d'entrée de la position: ${metrics.position.entryPrice.toFixed(2)} USDT`}>
-                          Entry: ${metrics.position.entryPrice.toFixed(2)}
+                      {metrics?.position?.type !== 'NONE' && metrics?.position?.entryPrice && (
+                        <span className="text-xs text-gray-500" title={`Prix d'entrée de la position: ${metrics?.position.entryPrice.toFixed(2)} USDT`}>
+                          Entry: ${metrics?.position.entryPrice.toFixed(2)}
                         </span>
                       )}
                     </div>
@@ -2524,14 +2542,14 @@ export default function Dashboard() {
                     <div className="flex flex-col" title="Profit/Perte non réalisé(e) de la position actuelle (avant clôture)">
                       <span className="text-gray-400 text-xs mb-1">UNREALIZED P&L</span>
                       <span className={`font-bold ${
-                        metrics.position.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                        (metrics?.position?.unrealizedPnL || 0) >= 0 ? 'text-green-400' : 'text-red-400'
                       }`}>
-                        {metrics.position.unrealizedPnL.toFixed(2)} USDT
+                        {(metrics?.position?.unrealizedPnL || 0).toFixed(2)} USDT
                       </span>
                       <span className={`text-xs ${
-                        metrics.position.unrealizedPnLPercent >= 0 ? 'text-green-400' : 'text-red-400'
+                        (metrics?.position?.unrealizedPnLPercent || 0) >= 0 ? 'text-green-400' : 'text-red-400'
                       }`} title="Pourcentage de profit/perte par rapport au prix d'entrée">
-                        {metrics.position.unrealizedPnLPercent.toFixed(2)}%
+                        {(metrics?.position?.unrealizedPnLPercent || 0).toFixed(2)}%
                       </span>
                     </div>
 
@@ -2539,12 +2557,12 @@ export default function Dashboard() {
                     <div className="flex flex-col" title="Profit/Perte total(e) cumulé(e) de toutes les positions fermées">
                       <span className="text-gray-400 text-xs mb-1">TOTAL P&L</span>
                       <span className={`font-bold ${
-                        metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                        (metrics?.totalPnL || 0) >= 0 ? 'text-green-400' : 'text-red-400'
                       }`}>
-                        {metrics.totalPnL.toFixed(2)} USDT
+                        {(metrics?.totalPnL || 0).toFixed(2)} USDT
                       </span>
-                      <span className="text-xs text-gray-500" title={`Nombre total de trades exécutés: ${metrics.totalTrades}`}>
-                        {metrics.totalTrades} trades
+                      <span className="text-xs text-gray-500" title={`Nombre total de trades exécutés: ${metrics?.totalTrades || 0}`}>
+                        {metrics?.totalTrades || 0} trades
                       </span>
                     </div>
 
@@ -2552,10 +2570,10 @@ export default function Dashboard() {
                     <div className="flex flex-col" title="Pourcentage de trades gagnants sur le total des trades">
                       <span className="text-gray-400 text-xs mb-1">WIN RATE</span>
                       <span className="font-bold text-blue-400">
-                        {metrics.winRate.toFixed(1)}%
+                        {(metrics?.winRate || 0).toFixed(1)}%
                       </span>
-                      <span className="text-xs text-gray-500" title={`${metrics.winningTrades} trades gagnants sur ${metrics.totalTrades} trades au total`}>
-                        {metrics.winningTrades}/{metrics.totalTrades} wins
+                      <span className="text-xs text-gray-500" title={`${metrics?.winningTrades} trades gagnants sur ${metrics?.totalTrades} trades au total`}>
+                        {(metrics?.winningTrades || 0)}/{metrics?.totalTrades} wins
                       </span>
                     </div>
                   </div>
@@ -2566,15 +2584,15 @@ export default function Dashboard() {
                     <div className="flex items-center gap-2">
                       <span className="text-gray-400 text-xs font-medium">POS:</span>
                       <span className={`font-bold text-sm ${
-                        metrics.position.type === 'LONG' ? 'text-green-400' : 
-                        metrics.position.type === 'SHORT' ? 'text-red-400' : 
+                        metrics?.position.type === 'LONG' ? 'text-green-400' : 
+                        metrics?.position.type === 'SHORT' ? 'text-red-400' : 
                         'text-gray-400'
                       }`}>
-                        {metrics.position.type}
+                        {metrics?.position.type}
                       </span>
-                      {metrics.position.type !== 'NONE' && (
+                      {metrics?.position.type !== 'NONE' && (
                         <span className="text-xs text-gray-400 font-mono">
-                          ${metrics.position.entryPrice.toFixed(2)}
+                          ${metrics?.position.entryPrice.toFixed(2)}
                         </span>
                       )}
                     </div>
@@ -2585,14 +2603,14 @@ export default function Dashboard() {
                     <div className="flex items-center gap-2">
                       <span className="text-gray-400 text-xs font-medium">UNREAL:</span>
                       <span className={`font-bold text-sm ${
-                        metrics.position.unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                        (metrics?.position?.unrealizedPnL || 0) >= 0 ? 'text-green-400' : 'text-red-400'
                       }`}>
-                        {metrics.position.unrealizedPnL >= 0 ? '+' : ''}{metrics.position.unrealizedPnL.toFixed(2)} USDT
+                        {(metrics?.position?.unrealizedPnL || 0) >= 0 ? '+' : ''}{(metrics?.position?.unrealizedPnL || 0).toFixed(2)} USDT
                       </span>
                       <span className={`text-xs ${
-                        metrics.position.unrealizedPnLPercent >= 0 ? 'text-green-400/70' : 'text-red-400/70'
+                        (metrics?.position?.unrealizedPnLPercent || 0) >= 0 ? 'text-green-400/70' : 'text-red-400/70'
                       }`}>
-                        ({metrics.position.unrealizedPnLPercent >= 0 ? '+' : ''}{metrics.position.unrealizedPnLPercent.toFixed(2)}%)
+                        ({(metrics?.position?.unrealizedPnLPercent || 0) >= 0 ? '+' : ''}{(metrics?.position?.unrealizedPnLPercent || 0).toFixed(2)}%)
                       </span>
                     </div>
 
@@ -2602,12 +2620,12 @@ export default function Dashboard() {
                     <div className="flex items-center gap-2">
                       <span className="text-gray-400 text-xs font-medium">TOTAL:</span>
                       <span className={`font-bold text-sm ${
-                        metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
+                        (metrics?.totalPnL || 0) >= 0 ? 'text-green-400' : 'text-red-400'
                       }`}>
-                        {metrics.totalPnL >= 0 ? '+' : ''}{metrics.totalPnL.toFixed(2)} USDT
+                        {(metrics?.totalPnL || 0) >= 0 ? '+' : ''}{(metrics?.totalPnL || 0).toFixed(2)} USDT
                       </span>
                       <span className="text-xs text-gray-400">
-                        ({metrics.totalTrades})
+                        ({(metrics?.totalTrades || 0)})
                       </span>
                     </div>
 
@@ -2617,10 +2635,10 @@ export default function Dashboard() {
                     <div className="flex items-center gap-2">
                       <span className="text-gray-400 text-xs font-medium">WIN:</span>
                       <span className="font-bold text-sm text-blue-400">
-                        {metrics.winRate.toFixed(1)}%
+                        {(metrics?.winRate || 0).toFixed(1)}%
                       </span>
                       <span className="text-xs text-gray-400">
-                        ({metrics.winningTrades}/{metrics.totalTrades})
+                        ({metrics?.winningTrades}/{metrics?.totalTrades})
                       </span>
                     </div>
                   </div>
@@ -2773,7 +2791,7 @@ export default function Dashboard() {
           )}
 
           {/* Trading Criteria & Multi-Strategy Performance Panel */}
-          {strategyPerformances.length === 0 ? (
+          {strategyPerformances.length === 0 && !isChangingTimeframe ? (
             <StrategyPanelSkeleton />
           ) : (
             <StrategyPanel 
