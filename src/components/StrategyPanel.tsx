@@ -194,6 +194,8 @@ interface StrategyPanelProps {
   onDeleteStrategy?: (strategyName: string) => void;
   onShowTimeframeComparison?: (strategyName: string) => void;
   onEditStrategy?: (strategyName: string, config: any) => void;
+  onToggleRL?: (strategyName: string, timeframe: string) => void;
+  rlEnabledStrategies?: Set<string>; // Strategies with RL enabled (format: "strategyName:timeframe")
 }
 
 export default function StrategyPanel({ 
@@ -220,7 +222,9 @@ export default function StrategyPanel({
   onIndicatorsOverlayTriggered,
   onDeleteStrategy,
   onShowTimeframeComparison,
-  onEditStrategy
+  onEditStrategy,
+  onToggleRL,
+  rlEnabledStrategies
 }: StrategyPanelProps) {
   const [viewMode, setViewMode] = useState<'compact' | 'normal'>('normal');
   const [resetConfirm, setResetConfirm] = useState<string | null>(null); // Strategy name to reset
@@ -228,7 +232,7 @@ export default function StrategyPanel({
   const [resetAllConfirm, setResetAllConfirm] = useState(false); // Confirmation for reset all
   const [flippedCards, setFlippedCards] = useState<Set<string>>(new Set()); // Cartes retournées pour afficher les détails
   const [expandedSections, setExpandedSections] = useState<Record<string, Set<string>>>({}); // Sections étendues par stratégie
-  const [sortMode, setSortMode] = useState<'smart' | 'pnl' | 'winrate' | 'capital' | 'alphabetical'>('smart'); // Mode de tri
+  const [sortMode, setSortMode] = useState<'smart' | 'pnl' | 'winrate' | 'capital' | 'alphabetical' | 'activePositions'>('smart'); // Mode de tri
   const [showAdvancedIndicators, setShowAdvancedIndicators] = useState(false); // Afficher tous les indicateurs avancés
   
   // Trigger indicators overlay from Dashboard
@@ -803,7 +807,15 @@ export default function StrategyPanel({
 
   // Fonction de tri multi-critères pour les stratégies
   const sortStrategies = (strategies: StrategyPerformance[]): StrategyPerformance[] => {
-    return [...strategies].sort((a, b) => {
+    // Si le mode est 'activePositions', filtrer d'abord les stratégies avec positions actives
+    let filteredStrategies = strategies;
+    if (sortMode === 'activePositions') {
+      filteredStrategies = strategies.filter(strategy => 
+        strategy.currentPosition && strategy.currentPosition.type !== 'NONE'
+      );
+    }
+    
+    return [...filteredStrategies].sort((a, b) => {
       switch (sortMode) {
         case 'pnl':
           // Tri par P&L uniquement
@@ -819,6 +831,23 @@ export default function StrategyPanel({
         
         case 'alphabetical':
           // Tri alphabétique
+          return a.strategyName.localeCompare(b.strategyName);
+        
+        case 'activePositions':
+          // Filtrer uniquement les stratégies avec positions actives
+          const aHasActivePosition = a.currentPosition && a.currentPosition.type !== 'NONE';
+          const bHasActivePosition = b.currentPosition && b.currentPosition.type !== 'NONE';
+          
+          if (aHasActivePosition !== bHasActivePosition) {
+            return aHasActivePosition ? -1 : 1;
+          }
+          
+          // Si les deux ont des positions, trier par P&L non réalisé
+          if (aHasActivePosition && bHasActivePosition) {
+            return (b.currentPosition?.unrealizedPnL || 0) - (a.currentPosition?.unrealizedPnL || 0);
+          }
+          
+          // Par défaut, ordre alphabétique
           return a.strategyName.localeCompare(b.strategyName);
         
         case 'smart':
@@ -878,6 +907,7 @@ export default function StrategyPanel({
       case 'winrate': return <HiLightningBolt className="w-4 h-4" />;
       case 'capital': return <HiCurrencyDollar className="w-4 h-4" />;
       case 'alphabetical': return <HiSortAscending className="w-4 h-4" />;
+      case 'activePositions': return <HiChartBar className="w-4 h-4" />;
       case 'smart': return <FaBrain className="w-4 h-4" />;
     }
   };
@@ -888,12 +918,13 @@ export default function StrategyPanel({
       case 'winrate': return 'Win Rate';
       case 'capital': return 'Capital';
       case 'alphabetical': return 'Alphabétique';
+      case 'activePositions': return 'Positions actives';
       case 'smart': return 'Intelligent';
     }
   };
 
   const cycleSortMode = () => {
-    const modes: typeof sortMode[] = ['smart', 'pnl', 'winrate', 'capital', 'alphabetical'];
+    const modes: typeof sortMode[] = ['smart', 'pnl', 'winrate', 'capital', 'alphabetical', 'activePositions'];
     const currentIndex = modes.indexOf(sortMode);
     const nextIndex = (currentIndex + 1) % modes.length;
     setSortMode(modes[nextIndex]);
@@ -1699,6 +1730,56 @@ export default function StrategyPanel({
             );
           })()}
 
+          {/* Toggle RL for All Strategies Button */}
+          {onToggleRL && (() => {
+            const rlEnabledCount = performances.filter(perf => 
+              rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`)
+            ).length;
+            const allRLEnabled = rlEnabledCount === performances.length;
+            const someRLEnabled = rlEnabledCount > 0;
+            
+            return (
+              <button
+                onClick={() => {
+                  // Toggle RL for all strategies
+                  const strategiesToToggle = performances.filter(perf => {
+                    const key = `${perf.strategyName}:${perf.timeframe}`;
+                    if (allRLEnabled) {
+                      // If all RL enabled, disable RL for all strategies
+                      return rlEnabledStrategies?.has(key);
+                    } else {
+                      // If not all RL enabled, enable RL for all strategies
+                      return !rlEnabledStrategies?.has(key);
+                    }
+                  });
+                  
+                  // Only make API calls for strategies that actually need to be toggled
+                  strategiesToToggle.forEach(perf => {
+                    if (onToggleRL) {
+                      onToggleRL(perf.strategyName, perf.timeframe);
+                    }
+                  });
+                  
+                  console.log(`${allRLEnabled ? 'Disabling' : 'Enabling'} RL for ${strategiesToToggle.length} strategies`);
+                }}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
+                  allRLEnabled
+                    ? 'bg-purple-900/20 border-purple-600/50 text-purple-400 hover:bg-purple-900/30'
+                    : someRLEnabled
+                    ? 'bg-purple-900/20 border-purple-600/50 text-purple-400 hover:bg-purple-900/30'
+                    : 'bg-gray-800/20 border-gray-600/50 text-gray-400 hover:bg-gray-800/30'
+                }`}
+                title={allRLEnabled ? 'Disable RL for all strategies' : 'Enable RL for all strategies'}
+              >
+                <FaBrain className={`w-4 h-4 ${allRLEnabled || someRLEnabled ? 'animate-pulse' : ''}`} />
+                <span className="text-xs font-medium">
+                  {allRLEnabled ? 'Disable RL All' : 'Enable RL All'}
+                </span>
+                <span className="text-[10px] opacity-70">({rlEnabledCount}/{performances.length})</span>
+              </button>
+            );
+          })()}
+
         {/* View Mode Buttons */}
         <div className="flex gap-1 bg-gray-800/50 rounded-lg border border-gray-700/50">
           <button
@@ -2372,6 +2453,20 @@ export default function StrategyPanel({
                         ))}
                     </div>
                     
+                      {/* RL Brain Icon - Always visible when active (only when toolbar not expanded) */}
+                      {onToggleRL && rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`) && !expandedActionButtons.has(perf.strategyName) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleRL(perf.strategyName, perf.timeframe);
+                          }}
+                          className="p-0.5 text-purple-400 hover:opacity-70 transition-opacity flex-shrink-0"
+                          title="RL Learning Enabled - Click to disable"
+                        >
+                          <FaBrain className="w-3 h-3 animate-pulse" />
+                        </button>
+                      )}
+
                       {/* Expand/Collapse Action Buttons - Before Toggle */}
                       <button
                         onClick={(e) => {
@@ -2431,6 +2526,31 @@ export default function StrategyPanel({
                       >
                         <HiAdjustments className="w-3.5 h-3.5" />
                       </button>
+
+                      {/* RL Brain Button */}
+                      {onToggleRL && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleRL(perf.strategyName, perf.timeframe);
+                          }}
+                          className={`p-1 transition-opacity ${
+                            rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`)
+                              ? 'text-purple-400 hover:opacity-70'
+                              : `${colors.text} hover:opacity-70`
+                          }`}
+                          title={rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`) 
+                            ? "RL Learning Enabled - Click to disable" 
+                            : "Enable RL Learning - Click to activate"
+                          }
+                        >
+                          <FaBrain className={`w-3.5 h-3.5 ${
+                            rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`)
+                              ? 'animate-pulse'
+                              : ''
+                          }`} />
+                        </button>
+                      )}
 
                       {/* Timeframe Comparison */}
                       {onShowTimeframeComparison && (
@@ -2644,6 +2764,31 @@ export default function StrategyPanel({
                         <HiTrendingUp className="w-3.5 h-3.5" />
                       </button>
 
+                      {/* RL Brain Button - Normal Mode */}
+                      {onToggleRL && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleRL(perf.strategyName, perf.timeframe);
+                          }}
+                          className={`p-1.5 transition-opacity ${
+                            rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`)
+                              ? 'text-purple-400 hover:opacity-70'
+                              : `${colors.text} hover:opacity-70`
+                          }`}
+                          title={rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`) 
+                            ? "RL Learning Enabled - Click to disable" 
+                            : "Enable RL Learning - Click to activate"
+                          }
+                        >
+                          <FaBrain className={`w-3.5 h-3.5 ${
+                            rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`)
+                              ? 'animate-pulse'
+                              : ''
+                          }`} />
+                        </button>
+                      )}
+
                           {/* Timeframe Comparison Button */}
                           {onShowTimeframeComparison && (
                             <button
@@ -2769,6 +2914,20 @@ export default function StrategyPanel({
                         </>
                       )}
                       
+                      {/* RL Brain Icon - Always visible when active (Normal Mode, only when toolbar not expanded) */}
+                      {onToggleRL && rlEnabledStrategies?.has(`${perf.strategyName}:${perf.timeframe}`) && !expandedActionButtons.has(perf.strategyName) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleRL(perf.strategyName, perf.timeframe);
+                          }}
+                          className="p-1 text-purple-400 hover:opacity-70 transition-opacity flex-shrink-0"
+                          title="RL Learning Enabled - Click to disable"
+                        >
+                          <FaBrain className="w-3.5 h-3.5 animate-pulse" />
+                        </button>
+                      )}
+
                       {/* Expand/Collapse Action Buttons - Before Toggle */}
                       <button
                         onClick={(e) => {

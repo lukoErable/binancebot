@@ -143,6 +143,29 @@ export class SharedMultiTimeframeWebSocketManager {
   }
   
   /**
+   * Get RL enabled strategies
+   */
+  private getRLEnabledStrategies(): string[] {
+    const rlEnabledStrategies: string[] = [];
+    
+    if (this.strategyManagerRef) {
+      try {
+        const performances = this.strategyManagerRef.getAllPerformances();
+        for (const perf of performances) {
+          const key = `${perf.strategyName}:${perf.timeframe}`;
+          if (this.strategyManagerRef.isRLEnabled(perf.strategyName, perf.timeframe)) {
+            rlEnabledStrategies.push(key);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error getting RL enabled strategies:', error);
+      }
+    }
+    
+    return rlEnabledStrategies;
+  }
+
+  /**
    * Send combined state to user
    */
   private sendCombinedState(): void {
@@ -266,6 +289,7 @@ export class SharedMultiTimeframeWebSocketManager {
       
       // Metadata
       strategyPerformances,
+      rlEnabledStrategies: this.getRLEnabledStrategies(),
       isConnected: true,
       lastUpdate: primaryData.lastUpdate,
       timeframe: this.primaryTimeframe,

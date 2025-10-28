@@ -66,7 +66,8 @@ export default function Dashboard() {
   const [showTimeframeComparison, setShowTimeframeComparison] = useState(false);
   const [comparisonStrategyName, setComparisonStrategyName] = useState<string | null>(null);
   const [allTimeframePerformances, setAllTimeframePerformances] = useState<StrategyPerformance[]>([]);
-  const [togglingStrategies, setTogglingStrategies] = useState<Set<string>>(new Set()); // Track strategies being toggled
+  const [togglingStrategies, setTogglingStrategies] = useState<Set<string>>(new Set());
+  const [rlEnabledStrategies, setRlEnabledStrategies] = useState<Set<string>>(new Set()); // Track strategies being toggled
   const [showAllPositions, setShowAllPositions] = useState(false);
   const [triggerIndicatorsOverlay, setTriggerIndicatorsOverlay] = useState(false);
   const [triggerAdvancedIndicatorsOverlay, setTriggerAdvancedIndicatorsOverlay] = useState(false);
@@ -198,6 +199,20 @@ export default function Dashboard() {
           // Clear timeout on first message
           clearTimeout(connectionTimeout);
           
+          // Update RL enabled strategies from SSE
+          if (data.rlEnabledStrategies) {
+            setRlEnabledStrategies(new Set(data.rlEnabledStrategies));
+            console.log('🧠 RL state updated from SSE:', data.rlEnabledStrategies);
+          }
+          
+          // Update strategy performances for current timeframe
+          if (data.strategyPerformances) {
+            const currentTimeframePerformances = data.strategyPerformances.filter(
+              perf => perf.timeframe === data.timeframe
+            );
+            setStrategyPerformances(currentTimeframePerformances);
+          }
+          
           // Update cache for ALL timeframes based on strategy performances
           setTimeframeStates(prev => {
             const newStates = { ...prev };
@@ -216,7 +231,8 @@ export default function Dashboard() {
                 newStates[tf] = {
                   ...data,
                   timeframe: tf,
-                  strategyPerformances: perfs
+                  strategyPerformances: perfs,
+                  rlEnabledStrategies: data.rlEnabledStrategies // Include RL state
                 };
               });
             }
@@ -331,6 +347,36 @@ export default function Dashboard() {
           return newSet;
         });
       }, 1000); // 1 second delay to prevent rapid re-toggles
+    }
+  };
+
+  const handleToggleRL = async (strategyName: string, timeframe: string) => {
+    const key = `${strategyName}:${timeframe}`;
+    const isCurrentlyEnabled = rlEnabledStrategies.has(key);
+    
+    try {
+      const response = await fetch('/api/rl-management', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: isCurrentlyEnabled ? 'disable' : 'enable',
+          strategyName: strategyName,
+          timeframe: timeframe
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to toggle RL');
+      }
+
+      const result = await response.json();
+      console.log('RL toggle result:', result);
+
+      // Don't update local state here - wait for SSE to confirm the change
+      // This prevents the button from disappearing and reappearing
+
+    } catch (error) {
+      console.error('Error toggling RL:', error);
     }
   };
 
@@ -544,9 +590,13 @@ export default function Dashboard() {
   // Update strategy performances from SSE data
   useEffect(() => {
     if (state?.strategyPerformances) {
-      setStrategyPerformances(state.strategyPerformances);
+      // Filter to only include strategies from the current timeframe
+      const currentTimeframePerformances = state.strategyPerformances.filter(
+        perf => perf.timeframe === selectedTimeframe
+      );
+      setStrategyPerformances(currentTimeframePerformances);
     }
-  }, [state?.strategyPerformances]);
+  }, [state?.strategyPerformances, selectedTimeframe]);
 
   const formatPrice = (price: number | undefined) => {
     if (!price) return '0.00';
@@ -2736,6 +2786,8 @@ export default function Dashboard() {
               selectedStrategy={selectedStrategy}
               onSelectStrategy={setSelectedStrategy}
               onRefresh={onRefresh}
+              onToggleRL={handleToggleRL}
+              rlEnabledStrategies={rlEnabledStrategies}
               advancedIndicators={state}
               basicIndicators={state}
               triggerIndicatorsOverlay={triggerIndicatorsOverlay}

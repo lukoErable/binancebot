@@ -110,6 +110,16 @@ export async function DELETE(request: Request) {
       const strategyData = (strategyManager as any).strategies?.get(key);
       
       if (strategyData) {
+        // Disable RL before removing strategy
+        if (strategyManager.isRLEnabled(name, tf)) {
+          try {
+            await strategyManager.disableRL(name, tf);
+            console.log(`🧠 RL automatically disabled for deleted strategy: ${name} [${tf}]`);
+          } catch (error) {
+            console.error(`❌ Error disabling RL for deleted strategy ${name} [${tf}]:`, error);
+          }
+        }
+        
         (strategyManager as any).strategies.delete(key);
         console.log(`🗑️ Removed strategy "${name}" [${tf}] from StrategyManager`);
         

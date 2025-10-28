@@ -1,8 +1,10 @@
-import { Candle, StrategyPerformance } from '@/types/trading';
+import { Candle, CompletedTrade, StrategyPerformance } from '@/types/trading';
 import { CustomStrategy, CustomStrategyConfig } from './custom-strategy';
 import CustomStrategyRepository from './db/custom-strategy-repository';
 import StrategyRepository from './db/strategy-repository';
 import { periodicActivationSaver } from './periodic-activation-saver';
+import { RLAction, RLState } from './rl-agent';
+import { rlLearningManager } from './rl-learning-manager';
 
 // Global singleton instance - created ONCE at server startup
 let globalStrategyManagerInstance: StrategyManager | null = null;
@@ -340,6 +342,16 @@ export class StrategyManager {
         localActivatedAt = null;
         strategyData.activatedAt = null;
         strategyData.isActive = false;
+        
+        // Disable RL when strategy is deactivated (async, don't block)
+        if (this.isRLEnabled(name, timeframe)) {
+          // Don't await - let it run in background
+          this.disableRL(name, timeframe).then(() => {
+            console.log(`🧠 RL automatically disabled for deactivated strategy: ${name} [${timeframe}]`);
+          }).catch((error) => {
+            console.error(`❌ Error disabling RL for deactivated strategy ${name} [${timeframe}]:`, error);
+          });
+        }
       }
       
       // Update local time for THIS timeframe only
@@ -427,6 +439,10 @@ export class StrategyManager {
       if (!strategyData.isActive) continue;
 
       const { name } = this.parseStrategyKey(key);
+      
+      // Collect RL state before analysis
+      const rlState = await this.collectMarketStateForRL(name, timeframe, candles, candles[candles.length - 1].close);
+      
       const signal = strategyData.strategy.analyzeMarket(candles);
       if (signal && signal.type !== 'HOLD') {
         console.log(`[${name}] [${timeframe}] Signal: ${signal.type} at $${signal.price.toFixed(2)} | ${signal.reason}`);
@@ -451,9 +467,15 @@ export class StrategyManager {
           }
           
           // Execute trade directly
-              strategyData.strategy.executeTrade(signal);
+          strategyData.strategy.executeTrade(signal);
+          
+          // Note: RL processing will happen when the trade is actually completed
+          // This is handled by the trade completion system, not here
         } else {
           strategyData.strategy.executeTrade(signal);
+          
+          // Note: RL processing will happen when the trade is actually completed
+          // This is handled by the trade completion system, not here
         }
       }
     }
@@ -581,5 +603,89 @@ export class StrategyManager {
       console.error(`❌ Error resetting strategy "${name}" [${timeframe}]:`, error);
       return false;
     }
+  }
+
+  /**
+   * Enable RL learning for a strategy
+   */
+  async enableRL(strategyName: string, timeframe: string): Promise<void> {
+    await rlLearningManager.enableStrategy(strategyName, timeframe);
+    console.log(`🧠 RL enabled for ${strategyName} [${timeframe}]`);
+  }
+
+  /**
+   * Disable RL learning for a strategy
+   */
+  async disableRL(strategyName: string, timeframe: string): Promise<void> {
+    await rlLearningManager.disableStrategy(strategyName, timeframe);
+    console.log(`🧠 RL disabled for ${strategyName} [${timeframe}]`);
+  }
+
+  /**
+   * Check if RL is enabled for a strategy
+   */
+  isRLEnabled(strategyName: string, timeframe: string): boolean {
+    return rlLearningManager.isEnabled(strategyName, timeframe);
+  }
+
+  /**
+   * Get RL adaptation suggestions for a strategy
+   */
+  async getRLAdaptationSuggestions(strategyName: string, timeframe: string): Promise<RLAction[]> {
+    return await rlLearningManager.getAdaptationSuggestions(strategyName, timeframe);
+  }
+
+  /**
+   * Process trade result for RL learning
+   */
+  async processTradeForRL(
+    strategyName: string,
+    timeframe: string,
+    trade: any,
+    previousState: RLState,
+    action: RLAction
+  ): Promise<void> {
+    await rlLearningManager.processTradeResult(strategyName, timeframe, trade, previousState, action);
+  }
+
+  /**
+   * Process completed trade for RL learning
+   * This should be called when a trade is actually completed
+   */
+  async processCompletedTradeForRL(
+    strategyName: string,
+    timeframe: string,
+    completedTrade: CompletedTrade
+  ): Promise<void> {
+    try {
+      // Get current market state for RL
+      const currentState = await this.collectMarketStateForRL(strategyName, timeframe, [], completedTrade.exitPrice);
+      if (!currentState) return;
+
+      // Generate RL action based on trade result
+      const rlAction: RLAction = {
+        adjustProfitTarget: completedTrade.pnl > 0 ? -0.05 : 0.1, // Reduce profit target if winning, increase if losing
+        adjustStopLoss: completedTrade.pnl > 0 ? -0.02 : 0.05,   // Reduce stop loss if winning, increase if losing
+        adjustPositionSize: completedTrade.pnl > 0 ? 1.05 : 0.95, // Increase size if winning, decrease if losing
+        adjustCooldown: completedTrade.pnl > 0 ? -10 : 20,        // Reduce cooldown if winning, increase if losing
+        pauseStrategy: false
+      };
+
+      await rlLearningManager.processTradeResult(strategyName, timeframe, completedTrade, currentState, rlAction);
+    } catch (error) {
+      console.error(`❌ Error processing completed trade for RL:`, error);
+    }
+  }
+
+  /**
+   * Collect market state for RL
+   */
+  async collectMarketStateForRL(
+    strategyName: string,
+    timeframe: string,
+    candles: Candle[],
+    currentPrice: number
+  ): Promise<RLState | null> {
+    return await rlLearningManager.collectMarketState(strategyName, timeframe, candles, currentPrice);
   }
 }

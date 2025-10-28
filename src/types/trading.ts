@@ -183,6 +183,7 @@ export interface StrategyState extends AdvancedIndicatorValues {
   winningTrades: number;
   timeframe: string;
   strategyPerformances?: StrategyPerformance[];
+  rlEnabledStrategies?: string[]; // RL enabled strategies (format: "strategyName:timeframe")
 }
 
 export interface BinanceKlineData {

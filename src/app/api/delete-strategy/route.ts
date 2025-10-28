@@ -56,6 +56,16 @@ export async function DELETE(request: NextRequest) {
     const { StrategyManager } = await import('@/lib/strategy-manager');
     const strategyManager = StrategyManager.getGlobalInstance();
     if (strategyManager) {
+      // Disable RL before reloading if it was enabled
+      if (strategyManager.isRLEnabled(strategyName, timeframe)) {
+        try {
+          await strategyManager.disableRL(strategyName, timeframe);
+          console.log(`🧠 RL automatically disabled for deleted strategy: ${strategyName} [${timeframe}]`);
+        } catch (error) {
+          console.error(`❌ Error disabling RL for deleted strategy ${strategyName} [${timeframe}]:`, error);
+        }
+      }
+      
       // Remove from in-memory map
       await strategyManager.reloadAllData();
       console.log(`✅ StrategyManager reloaded after deletion`);
