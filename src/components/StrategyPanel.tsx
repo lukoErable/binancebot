@@ -226,6 +226,10 @@ export default function StrategyPanel({
   onToggleRL,
   rlEnabledStrategies
 }: StrategyPanelProps) {
+  
+  // Pagination state for performance optimization
+  const [currentPage, setCurrentPage] = useState(1);
+  const [strategiesPerPage, setStrategiesPerPage] = useState(20); // Start with 20 strategies per page
   const [viewMode, setViewMode] = useState<'compact' | 'normal'>('normal');
   const [resetConfirm, setResetConfirm] = useState<string | null>(null); // Strategy name to reset
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null); // Strategy name to delete
@@ -1553,6 +1557,29 @@ export default function StrategyPanel({
   // Trier les stratégies selon plusieurs critères
   const sortedPerformances = filterStrategiesBySearch(sortStrategies(performances));
 
+  // Calculate pagination
+  const totalStrategies = sortedPerformances.length;
+  const totalPages = Math.ceil(totalStrategies / strategiesPerPage);
+  const startIndex = (currentPage - 1) * strategiesPerPage;
+  const endIndex = startIndex + strategiesPerPage;
+  const paginatedPerformances = sortedPerformances.slice(startIndex, endIndex);
+  
+  // Reset to page 1 when search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [strategySearch, sortMode]);
+
+  // Memory optimization: Clean up unused state when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clear any pending timeouts or intervals
+      setFlippedCards(new Set());
+      setExpandedSections({});
+      setCollapsedCategories(new Set());
+      setExpandedIndicators(new Set());
+    };
+  }, []);
+
   // Find best strategy (safe with empty array)
   const bestStrategy = performances.length > 0 
     ? performances.reduce((best, current) => current.totalPnL > best.totalPnL ? current : best)
@@ -1646,6 +1673,8 @@ export default function StrategyPanel({
             <div className="relative flex-1 max-w-xs">
               <HiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
               <input
+                id="strategy-search"
+                name="strategy-search"
                 type="text"
                 value={strategySearch}
                 onChange={(e) => setStrategySearch(e.target.value)}
@@ -2373,7 +2402,7 @@ export default function StrategyPanel({
           ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-3 3xl:grid-cols-4'
           : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-3 3xl:grid-cols-4'
       }`}>
-        {sortedPerformances.map((perf) => {
+        {paginatedPerformances.map((perf) => {
           const colors = getStrategyColor(perf);
           // Use colors from getStrategyColor which now handles focus correctly
           
@@ -3544,6 +3573,72 @@ export default function StrategyPanel({
           timeframe={selectedTimeframeForLocalBacktest}
           onBacktestComplete={handleLocalBacktestComplete}
         />
+      )}
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="px-4 py-3 bg-gray-800 border-t border-gray-700">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-gray-400">
+              <span>Showing {startIndex + 1}-{Math.min(endIndex, totalStrategies)} of {totalStrategies} strategies</span>
+              <select
+                value={strategiesPerPage}
+                onChange={(e) => {
+                  setStrategiesPerPage(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="ml-2 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-xs text-gray-300"
+              >
+                <option value={10}>10 per page</option>
+                <option value={20}>20 per page</option>
+                <option value={50}>50 per page</option>
+                <option value={100}>100 per page</option>
+              </select>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-gray-300 rounded transition-colors"
+              >
+                Previous
+              </button>
+              
+              <div className="flex items-center gap-1">
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  const pageNum = currentPage <= 3 ? i + 1 : 
+                                 currentPage >= totalPages - 2 ? totalPages - 4 + i :
+                                 currentPage - 2 + i;
+                  
+                  if (pageNum < 1 || pageNum > totalPages) return null;
+                  
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`px-2 py-1 text-sm rounded transition-colors ${
+                        currentPage === pageNum
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+              
+              <button
+                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-gray-300 rounded transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -3,7 +3,7 @@
 import { CustomStrategyConfig } from '@/lib/custom-strategy';
 import { StrategyPerformance, StrategyState } from '@/types/trading';
 import { signIn, useSession } from 'next-auth/react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   HiArrowRight,
   HiArrowUp,
@@ -20,7 +20,6 @@ import {
   HiTrendingUp,
   HiXCircle
 } from 'react-icons/hi';
-import BinanceChart from './BinanceChart';
 import {
   ChartSkeleton,
   CriteriaSkeleton,
@@ -30,11 +29,14 @@ import {
   StrategyPanelSkeleton,
   TradingInfoSkeleton
 } from './SkeletonLoader';
-import StrategyBuilder from './StrategyBuilder';
 import StrategyPanel from './StrategyPanel';
-import TimeframeComparison from './TimeframeComparison';
-import TradingHistory from './TradingHistory';
 import UserAuth from './UserAuth';
+
+// Lazy load heavy components for better performance
+const LazyBinanceChart = lazy(() => import('./BinanceChart'));
+const LazyStrategyBuilder = lazy(() => import('./StrategyBuilder'));
+const LazyTimeframeComparison = lazy(() => import('./TimeframeComparison'));
+const LazyTradingHistory = lazy(() => import('./TradingHistory'));
 
 // Extend Window interface for tradingEventSource
 declare global {
@@ -94,6 +96,22 @@ export default function Dashboard() {
       console.log(`Saved timeframe to localStorage: ${selectedTimeframe}`);
     }
   }, [selectedTimeframe, isFirstLoad]);
+
+  // Memory optimization: Clean up when component unmounts
+  useEffect(() => {
+    return () => {
+      // Close SSE connection
+      if (window.tradingEventSource) {
+        window.tradingEventSource.close();
+        window.tradingEventSource = undefined;
+      }
+      
+      // Clear large state objects
+      setTimeframeStates({});
+      setStrategyPerformances([]);
+      setLocalConfigCache({});
+    };
+  }, []);
 
   // Auto-start SSE when auth status is ready (includes reconnection on login/logout)
   useEffect(() => {
@@ -3013,38 +3031,42 @@ export default function Dashboard() {
           )}
 
           {/* Binance-style Chart */}
-          <BinanceChart state={state} selectedStrategy={selectedStrategy} strategyPerformances={filteredStrategyPerformances} localConfigCache={localConfigCache} />
+          <Suspense fallback={<ChartSkeleton />}>
+            <LazyBinanceChart state={state} selectedStrategy={selectedStrategy} strategyPerformances={filteredStrategyPerformances} localConfigCache={localConfigCache} />
+          </Suspense>
 
           {/* Professional Trading History */}
-          <TradingHistory 
-            strategyPerformances={filteredStrategyPerformances.map(perf => {
-              // Merge with localConfigCache if available
-              const cachedConfig = localConfigCache[perf.strategyName];
-              return cachedConfig ? {
-                ...perf,
-                config: {
-                  ...perf.config,
-                  ...cachedConfig
-                }
-              } : perf;
-            })} 
-            selectedStrategy={selectedStrategy}
-            currentStrategy={selectedStrategy !== 'GLOBAL' ? (() => {
-              const strategy = filteredStrategyPerformances.find(p => p.strategyName === selectedStrategy);
-              if (!strategy) return undefined;
-              
-              // Merge with localConfigCache if available
-              const cachedConfig = localConfigCache[selectedStrategy];
-              return cachedConfig ? {
-                ...strategy,
-                config: {
-                  ...strategy.config,
-                  ...cachedConfig
-                }
-              } : strategy;
-            })() : undefined}
-            getStrategyColor={getStrategyColor}
-          />
+          <Suspense fallback={<TradingInfoSkeleton />}>
+            <LazyTradingHistory 
+              strategyPerformances={filteredStrategyPerformances.map(perf => {
+                // Merge with localConfigCache if available
+                const cachedConfig = localConfigCache[perf.strategyName];
+                return cachedConfig ? {
+                  ...perf,
+                  config: {
+                    ...perf.config,
+                    ...cachedConfig
+                  }
+                } : perf;
+              })} 
+              selectedStrategy={selectedStrategy}
+              currentStrategy={selectedStrategy !== 'GLOBAL' ? (() => {
+                const strategy = filteredStrategyPerformances.find(p => p.strategyName === selectedStrategy);
+                if (!strategy) return undefined;
+                
+                // Merge with localConfigCache if available
+                const cachedConfig = localConfigCache[selectedStrategy];
+                return cachedConfig ? {
+                  ...strategy,
+                  config: {
+                    ...strategy.config,
+                    ...cachedConfig
+                  }
+                } : strategy;
+              })() : undefined}
+              getStrategyColor={getStrategyColor}
+            />
+          </Suspense>
         </>
       )}
 
@@ -3058,44 +3080,48 @@ export default function Dashboard() {
 
       {/* Strategy Builder Modal */}
       {showStrategyBuilder && (
-        <StrategyBuilder
-          onSave={handleSaveStrategy}
-          onClose={() => {
-            setShowStrategyBuilder(false);
-            setEditingStrategy(null);
-          }}
-          currentTimeframe={selectedTimeframe}
-          initialConfig={editingStrategy ? {
-            name: editingStrategy.name,
-            description: editingStrategy.config.description || '',
-            color: editingStrategy.config.color || 'emerald',
-            timeframe: selectedTimeframe,
-            profitTargetPercent: editingStrategy.config.profitTargetPercent || 2.0,
-            stopLossPercent: editingStrategy.config.stopLossPercent || 1.0,
-            maxPositionTime: editingStrategy.config.maxPositionTime || 60,
-            cooldownPeriod: editingStrategy.config.cooldownPeriod || 5,
-            longEntryConditions: editingStrategy.config.longEntryConditions || { conditions: [], operator: 'AND' },
-            shortEntryConditions: editingStrategy.config.shortEntryConditions || { conditions: [], operator: 'AND' },
-            longExitConditions: editingStrategy.config.longExitConditions || { conditions: [], operator: 'AND' },
-            shortExitConditions: editingStrategy.config.shortExitConditions || { conditions: [], operator: 'AND' },
-            positionSize: editingStrategy.config.positionSize || 1,
-            strategyType: editingStrategy.config.strategyType || 'CUSTOM',
-            simulationMode: editingStrategy.config.simulationMode !== undefined ? editingStrategy.config.simulationMode : true
-          } : undefined}
-        />
+        <Suspense fallback={<div className="fixed inset-0 bg-black/50 flex items-center justify-center"><div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div></div>}>
+          <LazyStrategyBuilder
+            onSave={handleSaveStrategy}
+            onClose={() => {
+              setShowStrategyBuilder(false);
+              setEditingStrategy(null);
+            }}
+            currentTimeframe={selectedTimeframe}
+            initialConfig={editingStrategy ? {
+              name: editingStrategy.name,
+              description: editingStrategy.config.description || '',
+              color: editingStrategy.config.color || 'emerald',
+              timeframe: selectedTimeframe,
+              profitTargetPercent: editingStrategy.config.profitTargetPercent || 2.0,
+              stopLossPercent: editingStrategy.config.stopLossPercent || 1.0,
+              maxPositionTime: editingStrategy.config.maxPositionTime || 60,
+              cooldownPeriod: editingStrategy.config.cooldownPeriod || 5,
+              longEntryConditions: editingStrategy.config.longEntryConditions || { conditions: [], operator: 'AND' },
+              shortEntryConditions: editingStrategy.config.shortEntryConditions || { conditions: [], operator: 'AND' },
+              longExitConditions: editingStrategy.config.longExitConditions || { conditions: [], operator: 'AND' },
+              shortExitConditions: editingStrategy.config.shortExitConditions || { conditions: [], operator: 'AND' },
+              positionSize: editingStrategy.config.positionSize || 1,
+              strategyType: editingStrategy.config.strategyType || 'CUSTOM',
+              simulationMode: editingStrategy.config.simulationMode !== undefined ? editingStrategy.config.simulationMode : true
+            } : undefined}
+          />
+        </Suspense>
       )}
 
       {/* Timeframe Comparison Modal */}
       {showTimeframeComparison && comparisonStrategyName && (
-        <TimeframeComparison
-          strategyName={comparisonStrategyName}
-          performances={allTimeframePerformances}
-          onClose={() => {
-            setShowTimeframeComparison(false);
-            setComparisonStrategyName(null);
-            setAllTimeframePerformances([]);
-          }}
-        />
+        <Suspense fallback={<div className="fixed inset-0 bg-black/50 flex items-center justify-center"><div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div></div>}>
+          <LazyTimeframeComparison
+            strategyName={comparisonStrategyName}
+            performances={allTimeframePerformances}
+            onClose={() => {
+              setShowTimeframeComparison(false);
+              setComparisonStrategyName(null);
+              setAllTimeframePerformances([]);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Login Required Modal */}
